@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# MD / simulation outputs
+*.xtc
+*.trr
+*.gro
+*.tpr
+*.edr
+*.log
+*.cpt
+
+# PCA / NMA results
+results/
+plots/
+*.npy
+*.npz
+
+# Temporary / cluster
+/tmp/
+scratch/
+*.out
+*.err
+slurm-*.log
+
+# OS
+.DS_Store
+
