@@ -13,6 +13,7 @@ from analysis_utils import (
     compute_confusion_matrices_per_replica,
     aggregate_best_matches,
     plot_best_match_barplot,
+    report_pca_variance_thresholds,
 )
 from collections import defaultdict
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
@@ -103,6 +104,21 @@ def main():
 
         pca_modes_by_replica.append(pca_rep)
         rep_order.append(rep)
+
+    # Report variance thresholds
+    rep = report_pca_variance_thresholds(
+        explained_variance_ratios=ipca.explained_variance_ratio_,
+        out_dir=out_dir,
+        prefix=pdb_code
+        targets=(0.80, 0.90, 0.95, 0.99),
+        save_plot=True,
+    )
+
+    print("[PCA] Variance thresholds:")
+    for t, k, a in zip(rep["targets"], rep["n_pcs"], rep["achieved"]):
+        print(f"  {t*100:.0f}% -> {k} PCs (achieved {a*100:.2f}%)")
+    if rep["plot"] is not None:
+        print(f"[PCA] Saved: {rep['plot']}")
 
     # ----- 3) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
