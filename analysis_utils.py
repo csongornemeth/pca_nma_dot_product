@@ -273,19 +273,21 @@ def report_pca_variance_thresholds(
     if save_plot:
         fig = plt.figure(figsize=(8, 5))
         plt.plot(np.arange(1, cum.size + 1), cum)
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+
+        plt.xticks(np.arange(1, cum.size + 1))  # 👈 ALL integers
         for t in targets:
             plt.axhline(t, linestyle="--")
         plt.xlabel("Number of principal components")
         plt.ylabel("Cumulative explained variance")
         plt.title("PCA cumulative explained variance")
         plt.ylim(0, 1.01)
+        plt.xlim(1, cum.size)
         plt.tight_layout()
 
         plot_path = out_dir / f"{prefix}_pca_explained_variance.png"
         fig.savefig(plot_path, dpi=200)
         plt.close(fig)
+
 
     return {
         "targets": targets,
