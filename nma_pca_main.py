@@ -61,6 +61,11 @@ def main():
     chunk_size = int(input("Chunk size for IncrementalPCA [500]: ") or 500)
     n_modes_keep = 20
 
+    # Output directory
+    out_root = Path("/home/csongor/boxpred")
+    out_dir = out_root / "results_validation" / pdb_code
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     pdb_dir = get_pdb_dir(pdb_code)
     xtc_paths = collect_xtc_paths(pdb_dir)
 
@@ -92,33 +97,33 @@ def main():
         for x in rep_xtcs:
             print(f"  - {x}")
 
-        pca_rep = run_incremental_pca_from_chunks(
+        pca_rep, evr_rep = run_incremental_pca_from_chunks(
             xtc_paths=rep_xtcs,
             topology=top_xtc_full,     # exact match for XTC atom order
             n_components=n_modes_keep,
             chunk_size=chunk_size,
             atom_indices=protein_heavy_idx
         )
+    #Variance reporting
 
-        print(f"[REPLICA {rep}] PCA modes shape: {pca_rep.shape}")
-
-        pca_modes_by_replica.append(pca_rep)
-        rep_order.append(rep)
-
-    # Report variance thresholds
-    rep = report_pca_variance_thresholds(
-        explained_variance_ratios=ipca.explained_variance_ratio_,
+    var = report_pca_variance_thresholds(
+        explained_variance_ratios=evr_rep,
         out_dir=out_dir,
-        prefix=pdb_code,
+        prefix=f"{pdb_code}_rep{rep}",
         targets=(0.80, 0.90, 0.95, 0.99),
         save_plot=True,
     )
 
-    print("[PCA] Variance thresholds:")
-    for t, k, a in zip(rep["targets"], rep["n_pcs"], rep["achieved"]):
+    print(f"[REPLICA {rep}] Variance thresholds:")
+    for t, k, a in zip(var["targets"], var["n_pcs"], var["achieved"]):
         print(f"  {t*100:.0f}% -> {k} PCs (achieved {a*100:.2f}%)")
-    if rep["plot"] is not None:
-        print(f"[PCA] Saved: {rep['plot']}")
+    if var["plot"] is not None:
+        print(f"[REPLICA {rep}] Saved: {var['plot']}")
+
+    print(f"[REPLICA {rep}] PCA modes shape: {pca_rep.shape}")
+
+    pca_modes_by_replica.append(pca_rep)
+    rep_order.append(rep)
 
     # ----- 3) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
@@ -126,11 +131,6 @@ def main():
         pca_modes_by_replica=pca_modes_by_replica,
         k_rmsip=10,
     )
-
-    # Output directory
-    out_root = Path("/home/csongor/boxpred")
-    out_dir = out_root / "results_validation" / pdb_code
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     # Save + plot per replica
     for d in rep_results:

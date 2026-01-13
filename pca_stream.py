@@ -58,7 +58,7 @@ def run_incremental_pca_from_chunks(
     n_components: int,
     chunk_size: int,
     atom_indices: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
 
     print_header("Running IncrementalPCA from streamed chunks")
 
@@ -99,4 +99,4 @@ def run_incremental_pca_from_chunks(
         ipca.explained_variance_ratio_[: min(5, ipca.n_components_)],
     )
 
-    return ipca.components_
+    return ipca.components_, ipca.explained_variance_ratio_
