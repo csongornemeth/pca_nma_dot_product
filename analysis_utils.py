@@ -267,10 +267,14 @@ def report_pca_variance_thresholds(
         n_pcs.append(k)
         achieved.append(float(cum[k - 1]))
 
+    #plot
+
     plot_path = None
     if save_plot:
         fig = plt.figure(figsize=(8, 5))
         plt.plot(np.arange(1, cum.size + 1), cum)
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
         for t in targets:
             plt.axhline(t, linestyle="--")
         plt.xlabel("Number of principal components")
