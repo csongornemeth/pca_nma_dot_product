@@ -104,26 +104,27 @@ def main():
             chunk_size=chunk_size,
             atom_indices=protein_heavy_idx
         )
-    #Variance reporting
 
-    var = report_pca_variance_thresholds(
-        explained_variance_ratios=evr_rep,
-        out_dir=out_dir,
-        prefix=f"{pdb_code}_rep{rep}",
-        targets=(0.80, 0.90, 0.95, 0.99),
-        save_plot=True,
-    )
+        # Variance reporting (INSIDE the replica loop)
+        var = report_pca_variance_thresholds(
+            explained_variance_ratio=evr_rep,
+            out_dir=out_dir,
+            prefix=f"{pdb_code}_rep{rep}",
+            targets=(0.80, 0.90, 0.95, 0.99),
+            save_plot=True,
+        )
 
-    print(f"[REPLICA {rep}] Variance thresholds:")
-    for t, k, a in zip(var["targets"], var["n_pcs"], var["achieved"]):
-        print(f"  {t*100:.0f}% -> {k} PCs (achieved {a*100:.2f}%)")
-    if var["plot"] is not None:
-        print(f"[REPLICA {rep}] Saved: {var['plot']}")
+        print(f"[REPLICA {rep}] Variance thresholds:")
+        for t, k, a in zip(var["targets"], var["n_pcs"], var["achieved"]):
+            print(f"  {t*100:.0f}% -> {k} PCs (achieved {a*100:.2f}%)")
 
-    print(f"[REPLICA {rep}] PCA modes shape: {pca_rep.shape}")
+        if var["plot"] is not None:
+            print(f"[REPLICA {rep}] Saved: {var['plot']}")
 
-    pca_modes_by_replica.append(pca_rep)
-    rep_order.append(rep)
+        print(f"[REPLICA {rep}] PCA modes shape: {pca_rep.shape}")
+
+        pca_modes_by_replica.append(pca_rep)
+        rep_order.append(rep)
 
     # ----- 3) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
@@ -156,15 +157,15 @@ def main():
             argbest_per_nma=d["argbest_per_nma"],
             out_path=bar_path,
             title=f"{pdb_code.upper()} – Replica {rep}: Best PCA match per NMA mode",
-        )   
+        )
 
     # Aggregate summary across replicas
     agg = aggregate_best_matches(rep_results)
     print_header("Aggregate across replicas")
     print(f"[AGG] RMSIP mean ± std: {agg['rmsip_mean']:.3f} ± {agg['rmsip_std']:.3f}")
 
-
     print("[MAIN] Pipeline finished successfully.")
+
 
 
 if __name__ == "__main__":

@@ -234,62 +234,59 @@ def plot_best_match_barplot(
 
     print(f"[PLOT] Best-match bar plot saved to: {out_path}")
 
-def report_pca_variance_thresholds (
-        expleaned_variance_ratio: np.ndarray,
-        out_dir: str | Path,
-        prefix: str,
-        targets = (0.80, 0,90, 0,95, 0.99),
-        save_plot: bool = True,
-): 
+def report_pca_variance_thresholds(
+    explained_variance_ratio: np.ndarray,
+    out_dir: str | Path,
+    prefix: str,
+    targets=(0.80, 0.90, 0.95, 0.99),
+    save_plot: bool = True,
+):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    evr = np.asanyarray(expleaned_variance_ratio, dtype=float).ravel()
+    evr = np.asarray(explained_variance_ratio, dtype=float).ravel()
     if evr.size == 0:
         raise ValueError("Empty explained variance ratio array provided.")
-    
-    #normalize
+
+    # normalise
     s = evr.sum()
-    if s == 0:
-        raise ValueError("Sum of explained variance ratios is zero, cannot normalize.")
+    if s <= 0:
+        raise ValueError("Sum of explained variance ratios is <= 0, cannot normalise.")
     evr = evr / s
 
     cum = np.cumsum(evr)
 
     targets = tuple(float(t) for t in targets)
     n_pcs = []
-    archived = []
+    achieved = []
     for t in targets:
-        if not (0.0 < t < 1.0):
-            raise ValueError(f"Target {t} is out of valid range (0, 1).")
-        k = int(np.searchsorted(cum, t, side = "left")) + 1
+        if not (0.0 < t <= 1.0):
+            raise ValueError(f"Target {t} is out of valid range (0, 1].")
+        k = int(np.searchsorted(cum, t, side="left") + 1)  # 1-based PC count
         k = min(k, evr.size)
         n_pcs.append(k)
-        archive.append(float(cum[k-1]))
+        achieved.append(float(cum[k - 1]))
 
-    #plot
     plot_path = None
     if save_plot:
-        import matplotlib.pyplot as plt
-
         fig = plt.figure(figsize=(8, 5))
-        plt.plot(no.arange(1, cum.size + 1), cum)
+        plt.plot(np.arange(1, cum.size + 1), cum)
         for t in targets:
-            plt.axhline(t, linestlyle="--")
-        plt.xlabel("Number of Principal Components")
-        plt.ylabel("Cumulative Explained Variance Ratio")
-        plt.title("PCA Explained Variance Ratio")
+            plt.axhline(t, linestyle="--")
+        plt.xlabel("Number of principal components")
+        plt.ylabel("Cumulative explained variance")
+        plt.title("PCA cumulative explained variance")
         plt.ylim(0, 1.01)
         plt.tight_layout()
 
         plot_path = out_dir / f"{prefix}_pca_explained_variance.png"
-        fig.savefig(plot_path)
+        fig.savefig(plot_path, dpi=200)
         plt.close(fig)
 
     return {
         "targets": targets,
         "n_pcs": tuple(n_pcs),
-        "archived": tuple(archived),
+        "achieved": tuple(achieved),
         "cumulative": cum,
         "plot": plot_path,
     }
