@@ -109,7 +109,7 @@ def main():
     rep = report_pca_variance_thresholds(
         explained_variance_ratios=ipca.explained_variance_ratio_,
         out_dir=out_dir,
-        prefix=pdb_code
+        prefix=pdb_code,
         targets=(0.80, 0.90, 0.95, 0.99),
         save_plot=True,
     )
