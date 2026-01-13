@@ -1,4 +1,4 @@
-This is a work-in-progress. The code is to be used accordingly
+This is a work in progress. The code is to be used accordingly
 
 # NMA–PCA Dot Product Validation
 
