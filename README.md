@@ -1,3 +1,5 @@
+This is a work-in-progress. The code is to be used accordingly
+
 # NMA–PCA Dot Product Validation
 
 Pipeline to compare Anisotropic Network Model (Bio3D) modes with
