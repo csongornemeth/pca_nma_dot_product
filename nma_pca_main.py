@@ -110,7 +110,7 @@ def main():
             explained_variance_ratio=evr_rep,
             out_dir=out_dir,
             prefix=f"{pdb_code}_rep{rep}",
-            targets=(0.80, 0.90, 0.95, 0.99),
+            targets=(0.75, 0.80, 0.90, 0.95, 0.99),
             save_plot=True,
         )
 
