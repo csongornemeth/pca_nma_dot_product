@@ -287,6 +287,13 @@ def report_pca_variance_thresholds(
         plot_path = out_dir / f"{prefix}_pca_explained_variance.png"
         fig.savefig(plot_path, dpi=200)
         plt.close(fig)
+    return {
+        "targets": targets,
+        "n_pcs": tuple(n_pcs),
+        "achieved": tuple(achieved),
+        "cumulative": cum,
+        "plot": plot_path,
+    }
 
 def plot_nma_pca_stacked_bars(
     confusion: np.ndarray,
@@ -354,10 +361,3 @@ def plot_nma_pca_stacked_bars(
         fig.savefig(outfile, dpi=dpi)
         plt.close(fig)
     
-    return {
-        "targets": targets,
-        "n_pcs": tuple(n_pcs),
-        "achieved": tuple(achieved),
-        "cumulative": cum,
-        "plot": plot_path,
-    }
