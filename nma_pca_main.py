@@ -14,6 +14,7 @@ from analysis_utils import (
     aggregate_best_matches,
     plot_best_match_barplot,
     report_pca_variance_thresholds,
+    plot_nma_pca_stacked_bars,
 )
 from collections import defaultdict
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
@@ -60,6 +61,7 @@ def main():
     pdb_code = input("Enter PDB code (4 characters): ").strip().lower()
     chunk_size = int(input("Chunk size for IncrementalPCA [500]: ") or 500)
     n_modes_keep = 20
+    k_stack = 10
 
     # Output directory
     out_root = Path("/home/csongor/boxpred")
@@ -138,6 +140,17 @@ def main():
         r_idx = d["replica"]              # index in pca_modes_by_replica
         rep = rep_order[r_idx]            # actual replica number from path
         confusion = d["confusion"]
+        kept_pcs = list(range(1, k_stack + 1))  # 1-based PC indices, only for this chart
+
+        stack_path = out_dir / f"{pdb_code}_rep{rep}_nma_pca_stacked.png"
+        plot_nma_pca_stacked_bars(
+            confusion=confusion,
+            kept_pca_idx=kept_pcs,
+            nma_start=7,
+            nma_end=n_modes_keep,
+            title=f"{pdb_code.upper()} – Replica {rep}: NMA overlap with first {k_stack} PCs (stacked)",
+            outfile=stack_path,
+)
 
         # Save raw matrix
         npy_path = out_dir / f"{pdb_code}_rep{rep}_confusion_matrix.npy"
