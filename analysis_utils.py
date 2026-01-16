@@ -238,7 +238,7 @@ def report_pca_variance_thresholds(
     explained_variance_ratio: np.ndarray,
     out_dir: str | Path,
     prefix: str,
-    targets=(0.80, 0.90, 0.95, 0.99),
+    targets=(0.75, 0.80, 0.90, 0.95, 0.99),
     save_plot: bool = True,
 ):
     out_dir = Path(out_dir)
