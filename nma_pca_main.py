@@ -18,6 +18,10 @@ from analysis_utils import (
     compute_nma_subspace_capture,
     plot_nma_pca_subspace_overlap,
 )
+from plot_utils import (
+    plot_confusion_matrix, 
+    plot_best_match_barplot,
+)
 from collections import defaultdict
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
 
