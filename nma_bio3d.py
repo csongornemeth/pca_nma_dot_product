@@ -57,27 +57,46 @@ def traj_to_pdb_string(traj: md.Trajectory) -> str:
     return pdb_text
 
 def setup_r_nma_function() -> None:
-    """
-    Define the run_aanma(pdb_text) function in the R global environment.
-
-    Returns a list with:
-      - U      : mode matrix (3N x nmodes_total)
-      - values : eigenvalues (length nmodes_total)
-    """
     r_code = r"""
     suppressPackageStartupMessages({
       library(bio3d)
     })
 
     run_aanma <- function(pdb_text) {
+
       tf <- tempfile(fileext = ".pdb")
       writeLines(pdb_text, tf)
 
-      pdb <- read.pdb(tf)
+      pdb <- tryCatch(
+        read.pdb(tf),
+        error = function(e) {
+          stop("read.pdb failed: ", e$message)
+        }
+      )
+
       unlink(tf)
 
       sel <- atom.select(pdb, "protein")
       pdb_trimmed <- trim.pdb(pdb, sel)
+
+      nma_aa <- tryCatch(
+        aanma.pdb(pdb_trimmed, rtb = FALSE, outmodes = "noh"),
+        error = function(e) {
+          stop("aanma.pdb failed: ", e$message)
+        }
+      )
+
+      if (is.null(nma_aa)) {
+        stop("aanma.pdb returned NULL")
+      }
+
+      if (is.null(nma_aa$U)) {
+        stop("nma_aa$U is NULL")
+      }
+
+      if (is.null(nma_aa$L)) {
+        stop("nma_aa$L (eigenvalues) is NULL")
+      }
 
       return(list(
         U = nma_aa$U,
