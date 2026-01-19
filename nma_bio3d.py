@@ -79,11 +79,9 @@ def setup_r_nma_function() -> None:
       sel <- atom.select(pdb, "protein")
       pdb_trimmed <- trim.pdb(pdb, sel)
 
-      nma_aa <- aanma.pdb(pdb_trimmed, rtb = FALSE, outmodes = "noh")
-
       return(list(
         U = nma_aa$U,
-        values = nma_aa$values
+        values = nma_aa$L
       ))
     }
     """
