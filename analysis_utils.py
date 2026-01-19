@@ -165,3 +165,36 @@ def compute_nma_subspace_capture(
     projection = np.sqrt(capture)
 
     return capture, projection
+
+def compute_pca_subspace_capture_by_nma(
+    confusion: np.ndarray,      # (n_nma, n_pca)
+    kept_nma_idx,               # list/array of NMA row indices (0-based)
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    For each PCA mode p, how much is captured by selected NMA modes?
+
+    capture_p[p] = Σ_m (u_m · v_p)^2 over selected NMA modes m
+    proj[m, p]   = (u_m · v_p)^2 for stacking
+    """
+    kept_nma_idx = np.asarray(kept_nma_idx, dtype=int)
+    proj = confusion[kept_nma_idx, :] ** 2            # (k_nma, n_pca)
+    capture = proj.sum(axis=0)                        # (n_pca,)
+    return capture, proj
+
+def nma_variance_threshold(eigvals: np.ndarray, n_trivial: int = 6):
+    """
+    eigvals: array of eigenvalues in mode order (including trivial at start).
+    Returns (x_modes, cumfrac) where x_modes is 1-based *non-trivial* mode index.
+    """
+    ev = np.asarray(eigvals, dtype=float)
+
+    # drop trivial modes (usually 6 for ANM; sometimes 5 depending on model)
+    ev = ev[n_trivial:]
+
+    # guard against zeros / negatives
+    ev = ev[ev > 0]
+
+    w = 1.0 / ev
+    cum = np.cumsum(w) / np.sum(w)
+    x = np.arange(1, cum.size + 1)
+    return x, cum

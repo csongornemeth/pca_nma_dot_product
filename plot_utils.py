@@ -264,3 +264,67 @@ def plot_nma_pca_subspace_overlap(
     else:
         plt.show()
 
+def plot_pca_nma_overlap_stacked(
+    proj: np.ndarray,         # (k_nma, n_pca) = (dot^2)
+    nma_labels: list[str],    # len = k_nma, e.g. ["NMA7", ...]
+    pc_start: int,
+    pc_end: int,
+    title: str,
+    outfile: str | Path,
+) -> None:
+    outfile = Path(outfile)
+
+    # Clamp pc_end to available PCs
+    n_pca = proj.shape[1]
+    pc_end_eff = min(pc_end, n_pca)
+    if pc_end_eff < pc_start:
+        raise ValueError(f"Invalid PC range: pc_start={pc_start}, pc_end={pc_end} with n_pca={n_pca}")
+
+    pcs = np.arange(pc_start, pc_end_eff + 1)  # 1-based labels
+    pc_idx0 = pcs - 1                          # to 0-based
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    bottom = np.zeros(len(pcs), dtype=float)
+
+    # If labels list is longer/shorter than proj rows, handle safely
+    k_nma = proj.shape[0]
+    if len(nma_labels) != k_nma:
+        nma_labels = [f"NMA{i+1}" for i in range(k_nma)]
+
+    for i, lab in enumerate(nma_labels):
+        vals = proj[i, pc_idx0]
+        ax.bar(pcs, vals, bottom=bottom, label=lab)
+        bottom += vals
+
+    ax.set_xlabel("PCA mode")
+    ax.set_ylabel("Sum of (dot²) | stacked by NMA")
+    ax.set_title(title)
+    ax.legend(loc="upper right", ncol=1)
+    ax.set_ylim(0, max(1.0, float(bottom.max()) * 1.05))
+
+    plt.tight_layout()
+    fig.savefig(outfile, dpi=200)
+    plt.close(fig)
+
+def plot_nma_cumulative_variance(
+    x: np.ndarray,
+    cum: np.ndarray,
+    title: str,
+    outfile: str | Path,
+    targets=(0.75, 0.8, 0.9, 0.95, 0.99),
+) -> None:
+    outfile = Path(outfile)
+
+    fig = plt.figure(figsize=(8, 5))
+    plt.plot(x, cum)
+    for t in targets:
+        plt.axhline(t, linestyle="--")
+
+    plt.xlabel("Number of non-trivial NMA modes")
+    plt.ylabel("Cumulative fraction of (1/λ)")
+    plt.title(title)
+    plt.ylim(0, 1.01)
+
+    plt.tight_layout()
+    fig.savefig(outfile, dpi=200)
+    plt.close(fig)
