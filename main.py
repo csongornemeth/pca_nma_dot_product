@@ -9,18 +9,17 @@ from nma_bio3d import run_aanma_r_from_traj
 from pca_stream import run_incremental_pca_from_chunks
 from analysis_utils import (
     compute_confusion_matrix,
-    plot_confusion_matrix,
     compute_confusion_matrices_per_replica,
     aggregate_best_matches,
-    plot_best_match_barplot,
-    report_pca_variance_thresholds,
-    plot_nma_pca_stacked_bars,
     compute_nma_subspace_capture,
     plot_nma_pca_subspace_overlap,
 )
 from plot_utils import (
     plot_confusion_matrix, 
     plot_best_match_barplot,
+    plot_nma_pca_stacked_bars,
+    plot_nma_pca_subspace_overlap,
+    plot_pca_variance_thresholds,
 )
 from collections import defaultdict
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
@@ -114,7 +113,7 @@ def main():
         )
 
         # Variance reporting (INSIDE the replica loop)
-        var = report_pca_variance_thresholds(
+        var = plot_pca_variance_thresholds(
             explained_variance_ratio=evr_rep,
             out_dir=out_dir,
             prefix=f"{pdb_code}_rep{rep}",
@@ -198,7 +197,34 @@ def main():
 
     print("[MAIN] Pipeline finished successfully.")
 
+    # ----- 4) Global (replica-averaged) confusion matrix -----
+    print_header("Computing global (replica-averaged) confusion matrix")
 
+    confusion_stack = np.stack(
+        [d["confusion"] for d in rep_results],
+        axis=0,   # (n_rep, n_nma, n_pca)
+    )
 
+    confusion_global = confusion_stack.mean(axis=0)
+
+    print(f"[GLOBAL] Confusion matrix shape: {confusion_global.shape}")
+    print(
+        f"[GLOBAL] Max={confusion_global.max():.4f}, "
+        f"Min={confusion_global.min():.4f}"
+    )
+
+    # Save raw array
+    global_npy = out_dir / f"{pdb_code}_global_confusion_matrix.npy"
+    np.save(global_npy, confusion_global)
+    print(f"[GLOBAL] Saved: {global_npy}")
+
+    # Plot heatmap
+    global_png = out_dir / f"{pdb_code}_global_confusion_matrix.png"
+    plot_confusion_matrix(
+        confusion_global,
+        global_png,
+        pdb_code=f"{pdb_code} (global mean)",
+    )
+    
 if __name__ == "__main__":
     main()
