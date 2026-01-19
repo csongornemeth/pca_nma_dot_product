@@ -361,3 +361,72 @@ def plot_nma_pca_stacked_bars(
         fig.savefig(outfile, dpi=dpi)
         plt.close(fig)
     
+def compute_nma_subspace_capture(
+    confusion: np.ndarray,
+    kept_pca_idx,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the subspace coverage of each NMA mode by the selected PCA modes.
+
+    capture[m] = Σ_p (u_m · v_p)^2  (bounded ~[0,1] if PCA modes are orthonormal)
+    projection[m] = sqrt(capture[m])
+    """
+    confusion = np.asarray(confusion)
+
+    kept = list(kept_pca_idx)
+    if len(kept) == 0:
+        raise ValueError("kept_pca_idx is empty.")
+
+    zero_based = any(k == 0 for k in kept)
+    kept_cols = kept if zero_based else [k - 1 for k in kept]
+
+    n_nma, n_pca = confusion.shape
+    if min(kept_cols) < 0 or max(kept_cols) >= n_pca:
+        raise ValueError(f"kept_pca_idx out of range for n_pca={n_pca}.")
+
+    sub = confusion[:, kept_cols]             # (n_nma, n_kept)
+    capture = np.sum(sub ** 2, axis=1)        # (n_nma,)
+    projection = np.sqrt(capture)
+
+    return capture, projection
+
+
+def plot_nma_pca_subspace_overlap(
+    capture: np.ndarray,
+    nma_start: int = 7,
+    nma_end: int | None = None,
+    title: str = "NMA subspace capture by selected PCA modes",
+    outfile: str | Path | None = None,
+    dpi: int = 200,
+) -> None:
+    """
+    Bar plot of subspace capture per NMA mode.
+    """
+    capture = np.asarray(capture)
+
+    if nma_end is None:
+        nma_end = capture.size
+
+    y = capture[nma_start - 1 : nma_end]
+    x = np.arange(nma_start, nma_end + 1)
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.4 * len(x)), 4))
+    ax.bar(x, y)
+
+    y_max = max(1.0, float(np.max(y)) * 1.1)
+
+    ax.set_xlabel("NMA mode")
+    ax.set_ylabel("Subspace capture Σ(dot²)")
+    ax.set_ylim(0, y_max)
+    ax.set_title(title)
+    ax.set_xticks(x)
+
+    fig.tight_layout()
+
+    if outfile is not None:
+        outfile = Path(outfile)
+        fig.savefig(outfile, dpi=dpi)
+        plt.close(fig)
+        print(f"[PLOT] NMA subspace capture plot saved to: {outfile}")
+    else:
+        plt.show()

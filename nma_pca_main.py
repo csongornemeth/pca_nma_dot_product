@@ -15,6 +15,8 @@ from analysis_utils import (
     plot_best_match_barplot,
     report_pca_variance_thresholds,
     plot_nma_pca_stacked_bars,
+    compute_nma_subspace_capture,
+    plot_nma_pca_subspace_overlap,
 )
 from collections import defaultdict
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
@@ -141,6 +143,19 @@ def main():
         rep = rep_order[r_idx]            # actual replica number from path
         confusion = d["confusion"]
         kept_pcs = list(range(1, k_stack + 1))  # 1-based PC indices, only for this chart
+        capture, proj = compute_nma_subspace_capture(
+            confusion=confusion,
+            kept_pca_idx=kept_pcs,
+        )
+
+        cap_plot = out_dir / f"{pdb_code}_rep{rep}_overlap_{k_stack}.png"
+        plot_nma_pca_subspace_overlap(
+            capture=capture,
+            nma_start=7,
+            nma_end=n_modes_keep,
+            title=f"{pdb_code.upper()} – Replica {rep}: NMA subspace capture by first {k_stack} PCs",
+            outfile=cap_plot,
+        )
 
         stack_path = out_dir / f"{pdb_code}_rep{rep}_nma_pca_stacked.png"
         plot_nma_pca_stacked_bars(
