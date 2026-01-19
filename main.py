@@ -12,7 +12,6 @@ from analysis_utils import (
     compute_confusion_matrices_per_replica,
     aggregate_best_matches,
     compute_nma_subspace_capture,
-    plot_nma_pca_subspace_overlap,
 )
 from plot_utils import (
     plot_confusion_matrix, 
