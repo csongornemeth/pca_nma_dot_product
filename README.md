@@ -13,4 +13,4 @@ dot-product similarity.
 - Replica-aware aggregation and plotting
 
 ## Usage
-python nma_pca_main.py
+python main.py
