@@ -36,3 +36,5 @@ slurm-*.log
 # OS
 .DS_Store
 
+# results
+*.csv
