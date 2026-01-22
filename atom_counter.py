@@ -6,7 +6,7 @@ import mdtraj as md
 
 RAW_ROOT = Path("/work001/misc/bekker/kakC/dynamicsdb/raw")
 PHASES = {"1", "2", "2b", "3", "3b", "4", "4b", "4c", "4d", "4f", "5"}
-GRO_NAME = "complex.gro"
+GRO_NAME = "prod.part0001.gro"
 
 
 def atom_counter(top: md.Topology) -> dict:
@@ -47,7 +47,7 @@ def main() -> None:
             if pdb_code in seen_pdbs:
                 continue
 
-            gro = pdb_dir / "build" / GRO_NAME
+            gro = pdb_dir / "validation" / "0" / GRO_NAME
             if not gro.exists():
                 continue  # don't write errors/missing entries
 
