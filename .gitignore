@@ -29,12 +29,17 @@ plots/
 # Temporary / cluster
 /tmp/
 scratch/
+/logs
 *.out
 *.err
 slurm-*.log
+*.sbatch
 
 # OS
 .DS_Store
 
 # results
 *.csv
+*.txt
+*.sbatch
+*.yml
