@@ -1,4 +1,6 @@
 # pca_stream.py
+from __future__ import annotations
+
 from pathlib import Path
 import numpy as np
 import mdtraj as md
@@ -12,13 +14,17 @@ def yield_pca_chunks(
     topology: md.Topology,
     chunk_size: int,
     atom_indices: np.ndarray,
+    align_indices: np.ndarray | None = None,
 ):
     """
     Generator that yields PCA-ready chunks X_chunk from one or more trajectories.
     Each X_chunk has shape (n_frames_chunk, 3 * n_atoms_sel).
 
-    atom_indices: indices of the protein-heavy atoms on the FULL topology
-                  (must be the same as used for NMA).
+    atom_indices:
+        Indices on the FULL topology passed to md.iterload (must match XTC natoms).
+    align_indices:
+        Indices in the *sliced* topology space (0..n_atoms_sel-1) used only for alignment.
+        If None, alignment uses all atoms in the sliced selection.
     """
     print_header("Streaming trajectory chunks for IncrementalPCA")
 
@@ -30,19 +36,24 @@ def yield_pca_chunks(
 
         for traj_chunk in md.iterload(
             xtc.as_posix(),
-            top=topology,  # FULL topology, matches XTC natoms
+            top=topology,       # FULL topology, matches XTC natoms
             chunk=chunk_size,
         ):
-            # Slice to the EXACT same protein-heavy atoms as NMA
+            # Slice to the EXACT same protein-heavy atoms as NMA/PCA features
             traj_sel = traj_chunk.atom_slice(atom_indices)
 
             if ref_coords is None:
-                ref_coords = traj_sel[0].xyz.copy()  # (1, n_atoms_sel, 3)
+                ref_coords = traj_sel[0].xyz.copy()   # shape (1, n_atoms_sel, 3)
                 ref_topology = traj_sel.topology
                 print(f"[CHUNK] Global reference frame set with {traj_sel.n_atoms} atoms")
 
             ref_traj = md.Trajectory(ref_coords, ref_topology)
-            traj_sel.superpose(ref_traj)
+
+            # Align (in-place) using either all atoms or a fixed alignment core
+            if align_indices is None:
+                traj_sel.superpose(ref_traj)
+            else:
+                traj_sel.superpose(ref_traj, atom_indices=align_indices)
 
             xyz = traj_sel.xyz  # (n_frames_chunk, n_atoms_sel, 3)
             n_frames_chunk, n_atoms_sel, _ = xyz.shape
@@ -58,8 +69,14 @@ def run_incremental_pca_from_chunks(
     n_components: int,
     chunk_size: int,
     atom_indices: np.ndarray,
+    align_indices: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Stream XTCs, align frames, and fit IncrementalPCA.
 
+    atom_indices: FULL-topology indices used to slice frames before PCA feature creation.
+    align_indices: LOCAL indices used only for alignment inside the sliced view.
+    """
     print_header("Running IncrementalPCA from streamed chunks")
 
     ipca = None
@@ -71,6 +88,7 @@ def run_incremental_pca_from_chunks(
         topology=topology,
         chunk_size=chunk_size,
         atom_indices=atom_indices,
+        align_indices=align_indices,
     ):
         n_frames_chunk, n_features_chunk = X_chunk.shape
         total_frames += n_frames_chunk

@@ -6,34 +6,28 @@ import numpy as np
 from io_utils import get_pdb_dir, load_full_topology
 
 
-def build_protein_heavy_views(
-    pdb_code: str,
-):
+def build_protein_heavy_views(pdb_code: str):
     """
     Returns:
         traj_protein_heavy_ref : md.Trajectory
-            Protein heavy-only reference trajectory for NMA.
+            Protein heavy-only reference trajectory for NMA (already sliced).
         top_xtc_protein : md.Topology
-            Topology that matches the XTC (protein-heavy only).
-        protein_heavy_idx : np.ndarray
-            Indices of protein-heavy atoms (0..n-1) inside top_xtc_protein.
+            Topology of traj_protein_heavy_ref (protein-heavy only).
+        protein_heavy_idx_local : np.ndarray
+            Local indices 0..N-1 within the protein-heavy topology.
+        protein_heavy_idx_full : np.ndarray
+            Indices of protein heavy atoms on the heavy-only FULL topology (top_xtc_full).
+            Use this to slice XTC chunks loaded with top_xtc_full.
         top_xtc_full : md.Topology
-            Heavy-only topology containing protein + ligand (if ligand exists).
+            Heavy-only topology containing protein + ligand heavy atoms (no water/ions/H).
     """
 
-    # ----------------------------------------------------
-    # Resolve paths *once* via io_utils
-    # ----------------------------------------------------
     pdb_dir = get_pdb_dir(pdb_code)
-    traj_full, top_full = load_full_topology(pdb_dir)   # <-- unpack tuple
+    traj_full, top_full = load_full_topology(pdb_dir)
 
     print(f"[traj_utils] Loaded full topology: {top_full.n_atoms} atoms")
 
-
-    # ----------------------------------------------------
-    # 1) Heavy-only (no H), no water, no ions
-    #    → protein + ligand heavy atoms
-    # ----------------------------------------------------
+    # 1) Heavy-only (no H), no water, no ions → protein + ligand heavy atoms
     ion_resnames = ["NA", "CL", "K", "CA", "MG", "ZN"]
     ion_clause = " or ".join(f"resname {x}" for x in ion_resnames)
 
@@ -46,9 +40,7 @@ def build_protein_heavy_views(
 
     print(f"[traj_utils] Heavy-only full topology: {top_xtc_full.n_atoms} atoms")
 
-    # ----------------------------------------------------
-    # 2) Protein-only heavy atoms
-    # ----------------------------------------------------
+    # 2) Protein-only heavy atoms (indices on top_xtc_full)
     protein_heavy_idx_full = top_xtc_full.select("protein")
 
     traj_protein_heavy_ref = traj_heavy_full.atom_slice(protein_heavy_idx_full)
@@ -59,12 +51,13 @@ def build_protein_heavy_views(
         f"{top_xtc_protein.n_atoms} atoms"
     )
 
-    # Inside protein-only topology, indices are 0..N-1
-    protein_heavy_idx = np.arange(top_xtc_protein.n_atoms, dtype=int)
+    # Local indices (0..N-1) within protein-heavy topology
+    protein_heavy_idx_local = np.arange(top_xtc_protein.n_atoms, dtype=int)
 
     return (
         traj_protein_heavy_ref,
         top_xtc_protein,
-        protein_heavy_idx,
+        protein_heavy_idx_local,
+        protein_heavy_idx_full,
         top_xtc_full,
     )
