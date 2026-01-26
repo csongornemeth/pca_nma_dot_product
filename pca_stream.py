@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import gzip
 import numpy as np
 import mdtraj as md
 from sklearn.decomposition import IncrementalPCA
@@ -112,9 +113,14 @@ def run_incremental_pca_from_chunks(
 
 def save_incremental_pca_to_json(ipca, out_path: Path):
     """
-    Save a fitted sklearn IncrementalPCA object to JSON.
+    Save a fitted sklearn IncrementalPCA object to a compressed JSON (.json.gz).
     """
     out_path = Path(out_path)
+
+    # Ensure .json.gz suffix
+    if out_path.suffix != ".gz":
+        out_path = out_path.with_suffix(out_path.suffix + ".gz")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     jso = {
@@ -131,7 +137,7 @@ def save_incremental_pca_to_json(ipca, out_path: Path):
         ),
     }
 
-    with open(out_path, "w") as fp:
-        json.dump(jso, fp, indent=2)
+    with gzip.open(out_path, "wt", encoding="utf-8") as fp:
+        json.dump(jso, fp)
 
-    print(f"[IPCA] Saved PCA JSON to: {out_path}")
+    print(f"[IPCA] Saved compressed PCA JSON to: {out_path}")

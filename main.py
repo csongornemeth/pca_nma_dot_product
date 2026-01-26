@@ -59,6 +59,10 @@ def main():
     pdb_code = input("Enter PDB code (4 characters): ").strip().lower()
     chunk_size = int(input("Chunk size for IncrementalPCA [500]: ") or 500)
 
+    save_pca_json = (
+        input("Save PCA results to JSON? (y/n) [n]: ").strip().lower() == "y"
+    )
+
     n_modes_keep = 20
     k_stack = 10
 
@@ -133,17 +137,20 @@ def main():
         print_header(f"Running PCA for replica {rep}")
         print(f"[REPLICA {rep}] #xtc files: {len(rep_xtcs)}")
 
-        # PCA JSON goes with other results
-        pca_json_path = out_dir / f"{pdb_code}_rep{rep}_ipca.json"
+        pca_json_path = (
+            out_dir / f"{pdb_code}_rep{rep}_ipca.json"
+            if save_pca_json
+            else None
+        )
 
         pca_rep, evr_rep = run_incremental_pca_from_chunks(
             xtc_paths=rep_xtcs,
             topology=top_xtc_full,
             n_components=n_modes_keep,
             chunk_size=chunk_size,
-            atom_indices=protein_heavy_idx_full,  # FULL indices for slicing chunks
-            align_indices=core_aidxs,             # LOCAL indices for alignment
-            save_json_path=pca_json_path,
+            atom_indices=protein_heavy_idx_full,
+            align_indices=core_aidxs,
+            save_json_path=pca_json_path,   # None → no save
         )
 
         plot_pca_variance_thresholds(
@@ -158,6 +165,7 @@ def main():
 
         pca_modes_by_replica.append(pca_rep)
         rep_order.append(rep)
+
 
     # ----- 3) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
