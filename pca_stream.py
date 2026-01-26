@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import numpy as np
 import mdtraj as md
 from sklearn.decomposition import IncrementalPCA
@@ -16,16 +17,6 @@ def yield_pca_chunks(
     atom_indices: np.ndarray,
     align_indices: np.ndarray | None = None,
 ):
-    """
-    Generator that yields PCA-ready chunks X_chunk from one or more trajectories.
-    Each X_chunk has shape (n_frames_chunk, 3 * n_atoms_sel).
-
-    atom_indices:
-        Indices on the FULL topology passed to md.iterload (must match XTC natoms).
-    align_indices:
-        Indices in the *sliced* topology space (0..n_atoms_sel-1) used only for alignment.
-        If None, alignment uses all atoms in the sliced selection.
-    """
     print_header("Streaming trajectory chunks for IncrementalPCA")
 
     ref_coords = None
@@ -36,26 +27,24 @@ def yield_pca_chunks(
 
         for traj_chunk in md.iterload(
             xtc.as_posix(),
-            top=topology,       # FULL topology, matches XTC natoms
+            top=topology,
             chunk=chunk_size,
         ):
-            # Slice to the EXACT same protein-heavy atoms as NMA/PCA features
             traj_sel = traj_chunk.atom_slice(atom_indices)
 
             if ref_coords is None:
-                ref_coords = traj_sel[0].xyz.copy()   # shape (1, n_atoms_sel, 3)
+                ref_coords = traj_sel[0].xyz.copy()
                 ref_topology = traj_sel.topology
                 print(f"[CHUNK] Global reference frame set with {traj_sel.n_atoms} atoms")
 
             ref_traj = md.Trajectory(ref_coords, ref_topology)
 
-            # Align (in-place) using either all atoms or a fixed alignment core
             if align_indices is None:
                 traj_sel.superpose(ref_traj)
             else:
                 traj_sel.superpose(ref_traj, atom_indices=align_indices)
 
-            xyz = traj_sel.xyz  # (n_frames_chunk, n_atoms_sel, 3)
+            xyz = traj_sel.xyz
             n_frames_chunk, n_atoms_sel, _ = xyz.shape
             X_chunk = xyz.reshape(n_frames_chunk, n_atoms_sel * 3)
 
@@ -70,12 +59,10 @@ def run_incremental_pca_from_chunks(
     chunk_size: int,
     atom_indices: np.ndarray,
     align_indices: np.ndarray | None = None,
+    save_json_path: Path | None = None,   # <-- ADD THIS
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Stream XTCs, align frames, and fit IncrementalPCA.
-
-    atom_indices: FULL-topology indices used to slice frames before PCA feature creation.
-    align_indices: LOCAL indices used only for alignment inside the sliced view.
     """
     print_header("Running IncrementalPCA from streamed chunks")
 
@@ -117,4 +104,34 @@ def run_incremental_pca_from_chunks(
         ipca.explained_variance_ratio_[: min(5, ipca.n_components_)],
     )
 
+    if save_json_path is not None:
+        save_incremental_pca_to_json(ipca, save_json_path)
+
     return ipca.components_, ipca.explained_variance_ratio_
+
+
+def save_incremental_pca_to_json(ipca, out_path: Path):
+    """
+    Save a fitted sklearn IncrementalPCA object to JSON.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    jso = {
+        "components_": ipca.components_.tolist(),
+        "explained_variance_": ipca.explained_variance_.tolist(),
+        "explained_variance_ratio_": ipca.explained_variance_ratio_.tolist(),
+        "singular_values_": ipca.singular_values_.tolist(),
+        "mean_": ipca.mean_.tolist(),
+        "n_components_": int(ipca.n_components_),
+        "noise_variance_": (
+            ipca.noise_variance_.tolist()
+            if np.ndim(ipca.noise_variance_) > 0
+            else float(ipca.noise_variance_)
+        ),
+    }
+
+    with open(out_path, "w") as fp:
+        json.dump(jso, fp, indent=2)
+
+    print(f"[IPCA] Saved PCA JSON to: {out_path}")
