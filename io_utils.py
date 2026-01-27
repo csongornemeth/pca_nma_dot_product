@@ -5,34 +5,77 @@ from pathlib import Path
 import re
 import mdtraj as md
 
-# ----------------------------
-# Pretty printing
-# ----------------------------
+#Printing helper
 def print_header(title: str):
     bar = "=" * len(title)
     print(f"\n{bar}\n{title}\n{bar}\n")
 
-# ----------------------------
-# DB config
-# ----------------------------
+
+#DB path configuration
+
 RAW_ROOT = Path("/work001/misc/bekker/kakC/dynamicsdb/raw")
 PHASES = {"1", "2", "2b", "3", "3b", "4", "4b", "4c", "4d", "4f", "5"}
 
 _part_re = re.compile(r"prod\.part(\d+)\.xtc$")
+
 
 def _require_exists(p: Path, what: str) -> Path:
     if not p.exists():
         raise FileNotFoundError(f"Missing {what}: {p}")
     return p
 
-# ----------------------------
-# Paths
-# ----------------------------
+
+#Order the phases so they can be used later to chose which pdb is newer
+
+def phase_order(ph: str) -> tuple[int, int]:
+    """
+    Helper to sort phases naturally (newer = larger):
+
+      1 < 2 < 2b < 3 < 3b < 4 < 4b < 4c < 4d < 4f < 5
+    """
+    ph = str(ph).strip().lower()
+    m = re.fullmatch(r"(\d+)([a-z]?)", ph)
+    if not m:
+        return (-1, -1)
+
+    num = int(m.group(1))
+    suf = m.group(2) or ""
+
+    # suffix ranking: "" < b < c < d < f
+    suf_rank = {"": 0, "b": 1, "c": 2, "d": 3, "f": 4}.get(suf, 99)
+    return (num, suf_rank)
+
+
+def _pick_newest_by_phase(candidates: list[Path]) -> Path:
+    """
+    candidates are RAW_ROOT/<phase>/<pdb_code>.
+    Pick the newest by phase_order().
+    """
+
+    def phase_of(p: Path) -> str:
+        # RAW_ROOT/<phase>/<pdb_code>
+        return p.parent.name
+
+    ranked = sorted(candidates, key=lambda p: phase_order(phase_of(p)), reverse=True)
+
+    if len(ranked) > 1:
+        print_header("[WARN] Duplicate PDB found in multiple phases; picking newest phase")
+        for d in ranked:
+            ph = d.parent.name
+            print(f"  - phase={ph:>2}  key={phase_order(ph)}  dir={d}")
+        print(f"[WARN] Using: {ranked[0]}")
+
+    return ranked[0]
+
+
+#get the pdb directory path
+
 def get_pdb_dir(pdb_code: str, phase: str | None = None) -> Path:
     """
     Return: RAW_ROOT/<phase>/<pdb_code>
 
     If phase is None, auto-discover by scanning PHASES.
+    If duplicates exist across phases, pick newest by phase_order().
     """
     pdb_code = pdb_code.strip().lower()
 
@@ -43,7 +86,7 @@ def get_pdb_dir(pdb_code: str, phase: str | None = None) -> Path:
         pdb_dir = RAW_ROOT / phase / pdb_code
         return _require_exists(pdb_dir, "PDB directory")
 
-    candidates = []
+    candidates: list[Path] = []
     for ph in sorted(PHASES):
         p = RAW_ROOT / ph / pdb_code
         if p.exists():
@@ -56,11 +99,8 @@ def get_pdb_dir(pdb_code: str, phase: str | None = None) -> Path:
             f"Could not find pdb_code='{pdb_code}' under {RAW_ROOT} in any phase."
         )
 
-    pretty = "\n".join(f"  - {c}" for c in candidates)
-    raise RuntimeError(
-        f"Ambiguous: pdb_code='{pdb_code}' exists in multiple phases. "
-        f"Specify phase explicitly.\nCandidates:\n{pretty}"
-    )
+    return _pick_newest_by_phase(candidates)
+
 
 def get_topology_path(pdb_dir: Path) -> Path:
     """
@@ -70,9 +110,9 @@ def get_topology_path(pdb_dir: Path) -> Path:
     gro = pdb_dir / "build" / "npt.gro"
     return _require_exists(gro, "topology (npt.gro)")
 
-# ----------------------------
-# Trajectories
-# ----------------------------
+
+#get the trajectories
+
 def collect_xtc_paths(pdb_dir: Path) -> list[Path]:
     """
     Collect *all* XTC parts from replicas 0..9:
@@ -111,9 +151,8 @@ def collect_xtc_paths(pdb_dir: Path) -> list[Path]:
         print(f"    {x}")
     return xtc_paths
 
-# ----------------------------
-# Topology loading
-# ----------------------------
+
+#load full topology
 def load_full_topology(pdb_dir: Path) -> tuple[md.Trajectory, md.Topology]:
     """
     Load full-system topology that matches the XTC atom ordering.
@@ -124,6 +163,7 @@ def load_full_topology(pdb_dir: Path) -> tuple[md.Trajectory, md.Topology]:
     top_full = traj_full.topology
     print(f"[MAIN] Full topology natoms ({gro.name}): {top_full.n_atoms}")
     return traj_full, top_full
+
 
 def get_protein_heavy_indices(top_full: md.Topology):
     """Return indices of protein heavy atoms on the full topology."""
