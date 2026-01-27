@@ -1,6 +1,6 @@
 # io_utils.py  (cluster DB layout)
 from __future__ import annotations
-
+from functools import lru_cache
 from pathlib import Path
 import re
 import mdtraj as md
@@ -70,12 +70,16 @@ def _pick_newest_by_phase(candidates: list[Path]) -> Path:
 
 #get the pdb directory path
 
+# Compute once: newest -> oldest
+PHASES_NEWEST_FIRST = tuple(sorted(PHASES, key=phase_order, reverse=True))
+
+@lru_cache(maxsize=None)
 def get_pdb_dir(pdb_code: str, phase: str | None = None) -> Path:
     """
     Return: RAW_ROOT/<phase>/<pdb_code>
 
-    If phase is None, auto-discover by scanning PHASES.
-    If duplicates exist across phases, pick newest by phase_order().
+    If phase is None, find the newest phase that contains the pdb_code
+    by scanning phases from newest -> oldest and returning the first hit.
     """
     pdb_code = pdb_code.strip().lower()
 
@@ -83,24 +87,20 @@ def get_pdb_dir(pdb_code: str, phase: str | None = None) -> Path:
         phase = str(phase).strip()
         if phase not in PHASES:
             raise ValueError(f"Unknown phase '{phase}'. Expected one of {sorted(PHASES)}")
-        pdb_dir = RAW_ROOT / phase / pdb_code
-        return _require_exists(pdb_dir, "PDB directory")
+        return _require_exists(RAW_ROOT / phase / pdb_code, "PDB directory")
 
-    candidates: list[Path] = []
-    for ph in sorted(PHASES):
+    # Fast path: newest -> oldest, first hit wins (minimal filesystem stats)
+    for ph in PHASES_NEWEST_FIRST:
         p = RAW_ROOT / ph / pdb_code
         if p.exists():
-            candidates.append(p)
+            return p
 
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) == 0:
-        raise FileNotFoundError(
-            f"Could not find pdb_code='{pdb_code}' under {RAW_ROOT} in any phase."
-        )
+    raise FileNotFoundError(
+        f"Could not find pdb_code='{pdb_code}' under {RAW_ROOT} in any phase."
+    )
+
 
     return _pick_newest_by_phase(candidates)
-
 
 def get_topology_path(pdb_dir: Path) -> Path:
     """
