@@ -34,6 +34,10 @@ scratch/
 *.err
 slurm-*.log
 *.sbatch
+*.bash
+*.json
+*.sbatch~
+*.txt~
 
 # OS
 .DS_Store
