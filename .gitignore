@@ -38,6 +38,7 @@ slurm-*.log
 *.json
 *.sbatch~
 *.txt~
+*.tsv
 
 # OS
 .DS_Store
