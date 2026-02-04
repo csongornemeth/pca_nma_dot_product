@@ -47,3 +47,4 @@ slurm-*.log
 *.txt
 *.sbatch
 *.yml
+*.png
