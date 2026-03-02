@@ -30,6 +30,7 @@ plots/
 /tmp/
 scratch/
 /logs
+archive/
 *.out
 *.err
 slurm-*.log
