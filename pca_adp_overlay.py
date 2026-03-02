@@ -26,6 +26,18 @@ Outputs:
 Notes:
   - If only one eigdir is found/provided, this script will still run:
     it will plot that single replica and the "mean" (identical).
+
+Usage examples:
+
+python pca_adp_overlay.py \
+  --eigroot results/3m3x \
+  --pdb-code 3m3x \
+  --pcs 1-20 \
+  --overlay-com \
+  --com-stat max \
+  --out results/3m3x/pca_overlap_with_com_max.png
+  --xtc /work001/misc/bekker/kakC/dynamicsdb/raw/5/1a7u/validation/0/prod.part0001.xtc \
+        /work001/misc/bekker/kakC/dynamicsdb/raw/5/1a7u/validation/0/prod.part0002.xtc \
 """
 
 import argparse
@@ -36,7 +48,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from traj_utils import build_protein_heavy_views
-
+from com_profile import compute_com_profile
+from io_utils import get_pdb_dir, collect_xtc_paths
 
 EIGDIR_GLOB_DEFAULT = "rep*_pca_eigs"
 
@@ -133,6 +146,8 @@ def plot_replica_overlay_panels(
     y_label: str,
     title: str | None = None,
     band_label: str = "±1 SD",
+    com_profile: np.ndarray | None = None,
+    com_ylabel: str = "Distance to COM (nm)",
 ) -> None:
     n_pcs = len(stacks)
     if n_pcs == 0:
@@ -174,6 +189,12 @@ def plot_replica_overlay_panels(
             ax.set_xticklabels([])
 
         ax.legend()
+
+        # Optional COM profile overlay (assumes same x-axis)
+        if com_profile is not None:
+            ax2 = ax.twinx()
+            ax2.plot(x, com_profile, linestyle="--", linewidth=2, color="orange", label="Distance to COM")
+            ax2.set_ylabel(com_ylabel)
 
     # Remove unused axes
     for j in range(n_pcs, n_rows * n_cols):
@@ -251,6 +272,9 @@ def main() -> None:
     ap.add_argument("--res-start", type=int, default=1, help="Starting residue index for x-axis (default: 1)")
     ap.add_argument("--out", default="pca_pc_contrib_overlay.png", help="Output PNG filename")
     ap.add_argument("--title", default=None, help="Optional figure title")
+    ap.add_argument("--xtc", nargs="+", default=None, help="One or more XTC paths (heavy-full ordering).")
+    ap.add_argument("--overlay-com", action="store_true", help="Overlay distance-to-COM curve.")
+    ap.add_argument("--com-stat", choices=["mean", "p95", "max"], default="p95")
     args = ap.parse_args()
 
     # Axis label
@@ -268,7 +292,8 @@ def main() -> None:
         raise ValueError("Provide either --eigdir (manual) or --eigroot (auto).")
 
     # Build topology and CA indices
-    _, top_xtc_protein, *_ = build_protein_heavy_views(args.pdb_code)
+    _, top_xtc_protein, protein_heavy_idx_local, protein_heavy_idx_full, top_xtc_full = \
+    build_protein_heavy_views(args.pdb_code)
     ca_idx = top_xtc_protein.select("name CA")
     if ca_idx.size == 0:
         raise ValueError("No CA atoms found in protein-heavy topology. Check topology/selection logic.")
@@ -278,6 +303,26 @@ def main() -> None:
         raise ValueError("PC indices must be 1-based positive integers, e.g. 1,2,3")
 
     n_atoms_top = top_xtc_protein.n_atoms
+
+    com_profile = None
+
+    if args.overlay_com:
+
+        # --- Decide where XTC paths come from ---
+        if args.xtc:
+            xtc_paths = [Path(x) for x in args.xtc]
+        else:
+            pdb_dir = get_pdb_dir(args.pdb_code)
+            xtc_paths = collect_xtc_paths(pdb_dir)
+
+        # --- Compute COM profile ---
+        com_profile = compute_com_profile(
+            xtc_paths=xtc_paths,
+            top_xtc_full=top_xtc_full,
+            protein_heavy_idx_full=protein_heavy_idx_full,
+            top_xtc_protein=top_xtc_protein,
+            stat=args.com_stat,
+        )
 
     # Collect per-PC contributions across replicas
     per_pc_rep_contribs: dict[int, list[np.ndarray]] = {p: [] for p in pcs}
@@ -340,6 +385,7 @@ def main() -> None:
         y_label=y_label,
         title=args.title,
         band_label=band_label,
+        com_profile=com_profile,
     )
 
     print(f"Saved: {out_png}")
