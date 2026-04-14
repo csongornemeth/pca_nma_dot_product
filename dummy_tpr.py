@@ -9,6 +9,11 @@ from pathlib import Path
 
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
 
+"""
+Run example:
+python dummy_tpr.py --pdb 1a7u --group Protein-H 
+"""
+
 
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
 gmx = GMX_DEFAULT
