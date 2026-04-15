@@ -10,6 +10,10 @@ import numpy as np
 
 from io_utils import get_pdb_dir, print_header
 
+"""
+Run example:
+python image_distance.py --pdb 1fof --group System
+"""
 
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
 

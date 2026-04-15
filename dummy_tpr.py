@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -10,13 +11,13 @@ from pathlib import Path
 from io_utils import get_pdb_dir, collect_xtc_paths, print_header
 
 """
-Run example:
-python dummy_tpr.py --pdb 1a7u --group Protein-H 
+Run examples:
+python dummy_tpr.py --pdb 1a7u
+python dummy_tpr.py --pdb 1a7u --group Protein-H
 """
 
-
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
-gmx = GMX_DEFAULT
+
 
 def run_cmd(cmd, input_text=None):
     result = subprocess.run(
@@ -26,9 +27,23 @@ def run_cmd(cmd, input_text=None):
         capture_output=True,
     )
     if result.returncode != 0:
+        print("\n[CMD FAILED]")
+        print("Command:", " ".join(cmd))
+        print("\n[STDOUT]")
         print(result.stdout)
+        print("\n[STDERR]")
         print(result.stderr)
         raise RuntimeError(f"Failed: {' '.join(cmd)}")
+    return result
+
+
+def run_cmd_result(cmd, input_text=None):
+    return subprocess.run(
+        cmd,
+        input=input_text,
+        text=True,
+        capture_output=True,
+    )
 
 
 # -------------------------
@@ -49,21 +64,18 @@ def cleanup_tmp_dir(tmp_dir: Path, pdb_code: str, wipe: bool):
                 pass
         return
 
-    # selective cleanup
     removed = 0
 
     for f in tmp_dir.glob("*"):
         name = f.name
 
-        # remove intermediate xtc parts
         if name.startswith(f"{pdb_code}_") and name.endswith(".xtc"):
             print(f"[CLEAN] Removing temp: {name}")
             f.unlink()
             removed += 1
 
-        # remove dummy tpr
         elif name == "dummy.tpr":
-            print(f"[CLEAN] Removing old dummy.tpr")
+            print("[CLEAN] Removing old dummy.tpr")
             f.unlink()
             removed += 1
 
@@ -72,7 +84,7 @@ def cleanup_tmp_dir(tmp_dir: Path, pdb_code: str, wipe: bool):
 
 # -------------------------
 def make_dummy_tpr(gmx, build_dir, dummy_tpr, group_name):
-    print_header("Creating dummy.tpr")
+    print_header(f"Creating dummy.tpr with group {group_name}")
 
     cmd = [
         gmx, "convert-tpr",
@@ -96,6 +108,103 @@ def group_xtcs_by_replica(xtc_paths):
     return replica_groups
 
 
+def parse_index_group_sizes(index_file: Path) -> dict[str, int]:
+    groups = {}
+    current_group = None
+    current_count = 0
+
+    with open(index_file) as f:
+        for raw_line in f:
+            line = raw_line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("[") and line.endswith("]"):
+                if current_group is not None:
+                    groups[current_group] = current_count
+
+                current_group = line.strip("[] ").strip()
+                current_count = 0
+            else:
+                if current_group is not None:
+                    current_count += len(line.split())
+
+    if current_group is not None:
+        groups[current_group] = current_count
+
+    return groups
+
+
+def get_xtc_atom_count(gmx: str, xtc_path: Path) -> int:
+    result = run_cmd_result([gmx, "check", "-f", str(xtc_path)])
+
+    text = result.stdout + "\n" + result.stderr
+
+    patterns = [
+        r"#\s*Atoms\s+(\d+)",   # <-- key fix
+        r"natoms\s*=\s*(\d+)",
+        r"contains\s+(\d+)\s+atoms",
+        r"(\d+)\s+atoms",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+
+    print("[DEBUG] gmx check output:")
+    print(text)
+
+    raise RuntimeError(
+        f"Could not determine atom count from XTC: {xtc_path}"
+    )
+
+
+def detect_matching_group(gmx: str, build_dir: Path, replica_groups, user_group: str | None):
+    print_header("Detecting correct group")
+
+    if not replica_groups:
+        raise RuntimeError("No XTC files found")
+
+    first_replica = sorted(replica_groups, key=lambda x: int(x))[0]
+    first_xtc = replica_groups[first_replica][0]
+
+    xtc_natoms = get_xtc_atom_count(gmx, first_xtc)
+    print(f"[INFO] XTC atom count: {xtc_natoms}")
+
+    index_file = build_dir / "index.ndx"
+    group_sizes = parse_index_group_sizes(index_file)
+
+    candidate_groups = ["Protein-H", "solute-H", "System"]
+    if user_group is not None:
+        candidate_groups = [user_group]
+
+    print("[INFO] Candidate group sizes:")
+    for g in candidate_groups:
+        if g in group_sizes:
+            print(f"  {g}: {group_sizes[g]}")
+        else:
+            print(f"  {g}: not present")
+
+    matches = [g for g in candidate_groups if group_sizes.get(g) == xtc_natoms]
+
+    if len(matches) == 1:
+        print(f"[AUTO] Using group: {matches[0]}")
+        return matches[0]
+
+    if len(matches) > 1:
+        print(f"[WARN] Multiple matching groups found: {', '.join(matches)}")
+        print(f"[AUTO] Using first match: {matches[0]}")
+        return matches[0]
+
+    raise RuntimeError(
+        f"No matching group found for XTC atom count {xtc_natoms}. "
+        f"Candidate sizes: " +
+        ", ".join(f"{g}={group_sizes.get(g, 'missing')}" for g in candidate_groups)
+    )
+
+
 def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, tmp_dir):
     print_header(f"Replica {replica_id}")
 
@@ -114,18 +223,15 @@ def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, t
                 "-o", str(tmp_xtc),
                 "-pbc", "mol",
             ],
-            input_text=f"{group_name}\n",
+            input_text="System\n",
         )
 
         temp_files.append(str(tmp_xtc))
 
     out_xtc = tmp_dir / f"cleaned_{pdb_code}_{replica_id}.xtc"
 
-    run_cmd(
-        [gmx, "trjcat", "-f", *temp_files, "-o", str(out_xtc)]
-    )
+    run_cmd([gmx, "trjcat", "-f", *temp_files, "-o", str(out_xtc)])
 
-    # remove intermediates immediately
     for f in temp_files:
         try:
             os.remove(f)
@@ -140,10 +246,8 @@ def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, t
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pdb", required=True)
-    parser.add_argument("--group", required=True, choices=["Protein-H", "solute-H"])
+    parser.add_argument("--group", choices=["Protein-H", "solute-H", "System"], default=None)
     parser.add_argument("--gmx", default=GMX_DEFAULT)
-
-    # NEW FLAGS
     parser.add_argument("--wipe", action="store_true", help="Delete all files in tmp before running")
 
     args = parser.parse_args()
@@ -158,25 +262,28 @@ def main():
     out_root.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # 🔥 CLEANUP FIRST
     cleanup_tmp_dir(tmp_dir, pdb_code, wipe=args.wipe)
-
-    dummy_tpr = tmp_dir / "dummy.tpr"
 
     print_header("Paths")
     print(f"PDB dir: {pdb_dir}")
     print(f"TMP dir: {tmp_dir}")
     print(f"GROMACS: {args.gmx}")
-    print(f"Group:   {args.group}")
 
-    # 1. dummy tpr
-    make_dummy_tpr(args.gmx, build_dir, dummy_tpr, args.group)
-
-    # 2. xtc collection
     xtc_paths = collect_xtc_paths(pdb_dir)
     replica_groups = group_xtcs_by_replica(xtc_paths)
 
-    # 3. process
+    group_name = detect_matching_group(
+        args.gmx,
+        build_dir,
+        replica_groups,
+        args.group,
+    )
+
+    print(f"Group:   {group_name}")
+
+    dummy_tpr = tmp_dir / "dummy.tpr"
+    make_dummy_tpr(args.gmx, build_dir, dummy_tpr, group_name)
+
     for replica_id in sorted(replica_groups, key=lambda x: int(x)):
         clean_replica(
             args.gmx,
@@ -184,7 +291,7 @@ def main():
             replica_id,
             replica_groups[replica_id],
             dummy_tpr,
-            args.group,
+            group_name,
             tmp_dir,
         )
 
