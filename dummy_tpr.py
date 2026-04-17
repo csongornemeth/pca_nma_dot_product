@@ -142,7 +142,7 @@ def get_xtc_atom_count(gmx: str, xtc_path: Path) -> int:
     text = result.stdout + "\n" + result.stderr
 
     patterns = [
-        r"#\s*Atoms\s+(\d+)",   # <-- key fix
+        r"#\s*Atoms\s+(\d+)",
         r"natoms\s*=\s*(\d+)",
         r"contains\s+(\d+)\s+atoms",
         r"(\d+)\s+atoms",
