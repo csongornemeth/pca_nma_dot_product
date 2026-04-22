@@ -31,6 +31,7 @@ plots/
 scratch/
 /logs
 archive/
+batch_files/
 *.out
 *.err
 slurm-*.log
