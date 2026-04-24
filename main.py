@@ -84,28 +84,6 @@ def main():
     print_header("Starting NMA–PCA comparison pipeline")
     print(f"[MAIN] Protein heavy atoms: {traj_protein_heavy_ref.n_atoms}")
 
-    # ----- 1) NMA -----
-    nma_modes, nma_eigvals = run_aanma_r_from_traj(
-        traj_protein_heavy_ref,
-        n_modes_keep,
-    )
-
-    nma_modes *= 0.1  # Å to nm conversion
-    print("[MAIN] NMA modes converted from Å to nm.")
-    print(f"[MAIN] NMA modes shape: {nma_modes.shape}")
-    print(f"[MAIN] NMA eigenvalues shape: {nma_eigvals.shape}")
-
-    # --- NMA cumulative variance plot ---
-    x_nma, cum_nma = nma_variance_threshold(nma_eigvals, n_trivial=6)
-    nma_cum_path = out_dir / f"{pdb_code}_nma_cumulative_variance.png"
-    plot_nma_cumulative_variance(
-        x=x_nma,
-        cum=cum_nma,
-        title=f"{pdb_code.upper()} – NMA cumulative variance (1/λ)",
-        outfile=nma_cum_path,
-    )
-    print(f"[MAIN] Saved NMA cumulative variance plot: {nma_cum_path}")
-
     # ----- 1.5) Alignment core (Pattern A) -----
     core_cache = out_dir / f"{pdb_code}_align_core_aidxs.npy"
 
@@ -115,16 +93,20 @@ def main():
     else:
         core_aidxs = compute_alignment_core_aidxs(
             xtc_paths=xtc_paths,
-            topology=top_xtc_full,                  # FULL topology for iterload
-            atom_indices_full=protein_heavy_idx_full,  # slice to protein-heavy
+            topology=top_xtc_full,
+            atom_indices_full=protein_heavy_idx_full,
             max_frames=2000,
             verbose=True,
         )
         np.save(core_cache, core_aidxs)
         print(f"[MAIN] Saved alignment core: {core_cache} (n={core_aidxs.size})")
 
-    # Optional sanity check: core indices must fit in sliced protein-heavy topology
+    # Optional sanity checks
     assert core_aidxs.max() < traj_protein_heavy_ref.n_atoms
+    print(f"[MAIN] Alignment core size: {core_aidxs.size}")
+    print(f"[MAIN] Protein-heavy atoms (local): {traj_protein_heavy_ref.n_atoms}")
+    print(f"[MAIN] Protein-heavy indices on full topology: {protein_heavy_idx_full.size}")
+    print(f"[MAIN] Heavy-only full topology atoms: {top_xtc_full.n_atoms}")
 
     # ----- 2) PCA (per replica) -----
     xtc_by_rep = group_xtc_paths_by_replica(xtc_paths)
@@ -150,7 +132,7 @@ def main():
             chunk_size=chunk_size,
             atom_indices=protein_heavy_idx_full,
             align_indices=core_aidxs,
-            save_json_path=pca_json_path,   # None → no save
+            save_json_path=pca_json_path,
         )
 
         plot_pca_variance_thresholds(
@@ -166,8 +148,29 @@ def main():
         pca_modes_by_replica.append(pca_rep)
         rep_order.append(rep)
 
+    # ----- 3) NMA -----
+    nma_modes, nma_eigvals = run_aanma_r_from_traj(
+        traj_protein_heavy_ref,
+        n_modes_keep,
+    )
 
-    # ----- 3) Compare (per replica) -----
+    nma_modes *= 0.1  # Å to nm conversion
+    print("[MAIN] NMA modes converted from Å to nm.")
+    print(f"[MAIN] NMA modes shape: {nma_modes.shape}")
+    print(f"[MAIN] NMA eigenvalues shape: {nma_eigvals.shape}")
+
+    # --- NMA cumulative variance plot ---
+    x_nma, cum_nma = nma_variance_threshold(nma_eigvals, n_trivial=6)
+    nma_cum_path = out_dir / f"{pdb_code}_nma_cumulative_variance.png"
+    plot_nma_cumulative_variance(
+        x=x_nma,
+        cum=cum_nma,
+        title=f"{pdb_code.upper()} – NMA cumulative variance (1/λ)",
+        outfile=nma_cum_path,
+    )
+    print(f"[MAIN] Saved NMA cumulative variance plot: {nma_cum_path}")
+
+    # ----- 4) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
         nma_modes=nma_modes,
         pca_modes_by_replica=pca_modes_by_replica,
@@ -235,7 +238,7 @@ def main():
             title=f"{pdb_code.upper()} – Replica {rep}: Best PCA match per NMA mode",
         )
 
-    # ----- 4) Global confusion matrix -----
+    # ----- 5) Global confusion matrix -----
     confusion_global = np.mean(
         np.stack([d["confusion"] for d in rep_results], axis=0),
         axis=0,

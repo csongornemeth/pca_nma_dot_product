@@ -1,4 +1,3 @@
-# pca_stream.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,6 +21,7 @@ def yield_pca_chunks(
 
     ref_coords = None
     ref_topology = None
+    ref_n_atoms = None
 
     for xtc in xtc_paths:
         print(f"[CHUNK] Reading from trajectory file: {xtc}")
@@ -31,14 +31,43 @@ def yield_pca_chunks(
             top=topology,
             chunk=chunk_size,
         ):
+            print(f"[CHUNK] traj_chunk.n_atoms before slice = {traj_chunk.n_atoms}")
+            print(f"[CHUNK] len(atom_indices) = {len(atom_indices)}")
+
             traj_sel = traj_chunk.atom_slice(atom_indices)
+
+            print(f"[CHUNK] traj_sel.n_atoms after slice = {traj_sel.n_atoms}")
+
+            if traj_sel.n_atoms != len(atom_indices):
+                raise ValueError(
+                    f"[ERROR] Sliced atom count mismatch in file {xtc}: "
+                    f"len(atom_indices)={len(atom_indices)}, "
+                    f"traj_sel.n_atoms={traj_sel.n_atoms}"
+                )
 
             if ref_coords is None:
                 ref_coords = traj_sel[0].xyz.copy()
                 ref_topology = traj_sel.topology
+                ref_n_atoms = traj_sel.n_atoms
                 print(f"[CHUNK] Global reference frame set with {traj_sel.n_atoms} atoms")
+            else:
+                if traj_sel.n_atoms != ref_n_atoms:
+                    raise ValueError(
+                        f"[ERROR] Atom count mismatch across chunks/files.\n"
+                        f"Reference atoms: {ref_n_atoms}\n"
+                        f"Current chunk atoms: {traj_sel.n_atoms}\n"
+                        f"File: {xtc}"
+                    )
 
-            ref_traj = md.Trajectory(ref_coords, ref_topology)
+            ref_traj = md.Trajectory(ref_coords.copy(), ref_topology)
+
+            if align_indices is not None:
+                if np.max(align_indices) >= traj_sel.n_atoms:
+                    raise ValueError(
+                        f"[ERROR] align_indices out of bounds for file {xtc}: "
+                        f"max(align_indices)={np.max(align_indices)}, "
+                        f"traj_sel.n_atoms={traj_sel.n_atoms}"
+                    )
 
             if align_indices is None:
                 traj_sel.superpose(ref_traj)
@@ -60,7 +89,7 @@ def run_incremental_pca_from_chunks(
     chunk_size: int,
     atom_indices: np.ndarray,
     align_indices: np.ndarray | None = None,
-    save_json_path: Path | None = None,   # <-- ADD THIS
+    save_json_path: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Stream XTCs, align frames, and fit IncrementalPCA.
@@ -117,7 +146,6 @@ def save_incremental_pca_to_json(ipca, out_path: Path):
     """
     out_path = Path(out_path)
 
-    # Ensure .json.gz suffix
     if out_path.suffix != ".gz":
         out_path = out_path.with_suffix(out_path.suffix + ".gz")
 
