@@ -13,7 +13,7 @@ from io_utils import get_pdb_dir, collect_xtc_paths, print_header
 """
 Run examples:
 python dummy_tpr.py --pdb 1a7u
-python dummy_tpr.py --pdb 1a7u --group Protein-H
+python dummy_tpr.py --pdb 3b9c --group Protein-H
 """
 
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
@@ -92,7 +92,7 @@ def make_dummy_tpr(gmx, build_dir, dummy_tpr, group_name):
         "-n", str(build_dir / "index.ndx"),
         "-o", str(dummy_tpr),
     ]
-    run_cmd(cmd, input_text=f"{group_name}\n")
+    run_cmd(cmd, input_text=f"Protein-H\n")
 
 
 def group_xtcs_by_replica(xtc_paths):
@@ -211,22 +211,43 @@ def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, t
     temp_files = []
 
     for i, xtc in enumerate(xtc_files):
+        mol_xtc = tmp_dir / f"{pdb_code}_{replica_id}_{i}_mol.xtc"
         tmp_xtc = tmp_dir / f"{pdb_code}_{replica_id}_{i}.xtc"
 
         print(f"[INFO] {xtc.name} -> {tmp_xtc.name}")
 
+        # Step 1: make molecules whole
         run_cmd(
             [
                 gmx, "trjconv",
                 "-s", str(dummy_tpr),
                 "-f", str(xtc),
-                "-o", str(tmp_xtc),
+                "-o", str(mol_xtc),
                 "-pbc", "mol",
             ],
             input_text="System\n",
         )
 
+        # Step 2: cluster chains together
+        run_cmd(
+            [
+                gmx, "trjconv",
+                "-s", str(dummy_tpr),
+                "-f", str(mol_xtc),
+                "-o", str(tmp_xtc),
+                "-pbc", "whole",
+                "-center",
+            ],
+            input_text=f"Protein\nSystem\n",
+        )
+
         temp_files.append(str(tmp_xtc))
+
+        # cleanup intermediate
+        try:
+            os.remove(mol_xtc)
+        except FileNotFoundError:
+            pass
 
     out_xtc = tmp_dir / f"cleaned_{pdb_code}_{replica_id}.xtc"
 
