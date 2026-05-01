@@ -30,6 +30,7 @@ plots/
 /tmp/
 scratch/
 /logs
+MD_sims/
 archive/
 batch_files/
 *.out
