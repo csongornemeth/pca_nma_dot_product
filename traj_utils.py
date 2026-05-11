@@ -28,7 +28,7 @@ def build_protein_heavy_views(pdb_code: str):
     print(f"[traj_utils] Loaded full topology: {top_full.n_atoms} atoms")
 
     # 1) Heavy-only (no H), no water, no ions → protein + ligand heavy atoms
-    ion_resnames = ["NA", "CL", "K", "CA", "MG", "ZN"]
+    ion_resnames = ["NA", "CL"]
     ion_clause = " or ".join(f"resname {x}" for x in ion_resnames)
 
     sel_full_heavy = top_full.select(

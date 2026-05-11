@@ -53,3 +53,4 @@ slurm-*.log
 *.sbatch
 *.yml
 *.png
+*.xlsx

@@ -108,6 +108,28 @@ def main():
     print(f"[MAIN] Protein-heavy indices on full topology: {protein_heavy_idx_full.size}")
     print(f"[MAIN] Heavy-only full topology atoms: {top_xtc_full.n_atoms}")
 
+    # ----- 3) NMA -----
+    nma_modes, nma_eigvals = run_aanma_r_from_traj(
+        traj_protein_heavy_ref,
+        n_modes_keep,
+    )
+
+    nma_modes *= 0.1  # Å to nm conversion
+    print("[MAIN] NMA modes converted from Å to nm.")
+    print(f"[MAIN] NMA modes shape: {nma_modes.shape}")
+    print(f"[MAIN] NMA eigenvalues shape: {nma_eigvals.shape}")
+
+    # --- NMA cumulative variance plot ---
+    x_nma, cum_nma = nma_variance_threshold(nma_eigvals, n_trivial=6)
+    nma_cum_path = out_dir / f"{pdb_code}_nma_cumulative_variance.png"
+    plot_nma_cumulative_variance(
+        x=x_nma,
+        cum=cum_nma,
+        title=f"{pdb_code.upper()} – NMA cumulative variance (1/λ)",
+        outfile=nma_cum_path,
+    )
+    print(f"[MAIN] Saved NMA cumulative variance plot: {nma_cum_path}")
+
     # ----- 2) PCA (per replica) -----
     xtc_by_rep = group_xtc_paths_by_replica(xtc_paths)
     print_header(f"Found replicas: {list(xtc_by_rep.keys())}")
@@ -147,28 +169,6 @@ def main():
 
         pca_modes_by_replica.append(pca_rep)
         rep_order.append(rep)
-
-    # ----- 3) NMA -----
-    nma_modes, nma_eigvals = run_aanma_r_from_traj(
-        traj_protein_heavy_ref,
-        n_modes_keep,
-    )
-
-    nma_modes *= 0.1  # Å to nm conversion
-    print("[MAIN] NMA modes converted from Å to nm.")
-    print(f"[MAIN] NMA modes shape: {nma_modes.shape}")
-    print(f"[MAIN] NMA eigenvalues shape: {nma_eigvals.shape}")
-
-    # --- NMA cumulative variance plot ---
-    x_nma, cum_nma = nma_variance_threshold(nma_eigvals, n_trivial=6)
-    nma_cum_path = out_dir / f"{pdb_code}_nma_cumulative_variance.png"
-    plot_nma_cumulative_variance(
-        x=x_nma,
-        cum=cum_nma,
-        title=f"{pdb_code.upper()} – NMA cumulative variance (1/λ)",
-        outfile=nma_cum_path,
-    )
-    print(f"[MAIN] Saved NMA cumulative variance plot: {nma_cum_path}")
 
     # ----- 4) Compare (per replica) -----
     rep_results = compute_confusion_matrices_per_replica(
