@@ -33,7 +33,8 @@ def run_cmd(cmd, input_text=None):
 
 
 def find_cleaned_xtcs(tmp_dir: Path, pdb_code: str):
-    return sorted(tmp_dir.glob(f"cleaned_{pdb_code}_*.xtc"))
+    xtc_dir = Path(f"MD_sims/{pdb_code}/tmp/")
+    return sorted(xtc_dir.glob("*.xtc"))
 
 
 def extract_replica_id(xtc_path: Path, pdb_code: str) -> str:
@@ -113,12 +114,12 @@ def main():
     pdb_code = args.pdb.lower()
     pdb_dir = get_pdb_dir(pdb_code)
 
-    out_root = Path(f"results/{pdb_code}")
-    tmp_dir = out_root / "tmp2"
+    out_root = Path(f"MD_sims/{pdb_code}")
+    tmp_dir = out_root / "tmp"
     dummy_tpr = tmp_dir / "dummy.tpr"
 
     if not tmp_dir.exists():
-        raise FileNotFoundError(f"tmp2 dir not found: {tmp_dir}")
+        raise FileNotFoundError(f"tmp dir not found: {tmp_dir}")
     if not dummy_tpr.exists():
         raise FileNotFoundError(f"dummy.tpr not found: {dummy_tpr}")
 
@@ -126,7 +127,7 @@ def main():
     if not cleaned_xtcs:
         raise FileNotFoundError(f"No cleaned trajectories found in {tmp_dir}")
 
-    dist_dir = out_root / "periodic_image_distance_0512"
+    dist_dir = out_root / "periodic_image_distance"
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     print_header("Periodic image distance calculation")

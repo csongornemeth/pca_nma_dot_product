@@ -12,7 +12,7 @@ from io_utils import get_pdb_dir, collect_xtc_paths, print_header
 
 """
 Run examples:
-python dummy_tpr.py --pdb 1a7u
+python dummy_tpr_path.py --pdb 3b9c
 python dummy_tpr.py --pdb 3ef4 --group Protein-H
 """
 
@@ -277,8 +277,8 @@ def main():
     pdb_dir = get_pdb_dir(pdb_code)
     build_dir = pdb_dir / "build"
 
-    out_root = Path(f"results/{pdb_code}")
-    tmp_dir = out_root / "tmp2"
+    out_root = Path(f"MD_sims/{pdb_code}")
+    tmp_dir = out_root / "tmp"
 
     out_root.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -290,7 +290,10 @@ def main():
     print(f"TMP dir: {tmp_dir}")
     print(f"GROMACS: {args.gmx}")
 
-    xtc_paths = collect_xtc_paths(pdb_dir)
+    xtc_paths = sorted(
+        Path(f"MD_sims/{pdb_code}/validation").rglob("*.xtc")
+)
+
     replica_groups = group_xtcs_by_replica(xtc_paths)
 
     group_name = detect_matching_group(
