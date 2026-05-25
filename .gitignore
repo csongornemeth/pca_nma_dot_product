@@ -43,6 +43,8 @@ slurm-*.log
 *.txt~
 *.tsv
 *.temp.*.*
+*.RData
+*.Rhistory
 
 # OS
 .DS_Store
