@@ -26,7 +26,7 @@ from nm_fit_utils import (
 """
 Run with the following command from the repository root:
 python run_nm_displacement_fit.py \
-  --pdb 7lak \
+  --pdb 7n6h \
   --replica 0 \
   --target-mode max-displacement \
   --n-modes-keep 20 \
@@ -42,19 +42,26 @@ def collect_replica_xtcs(
     replica: int,
 ) -> list[Path]:
     """
-    Collect XTC files for one replica.
-    """
-    pdb_dir = get_pdb_dir(pdb_code)
-    xtc_paths = collect_xtc_paths(pdb_dir)
+    Collect cleaned PBC-fixed XTC files for one replica.
 
-    replica_paths = [
-        p for p in xtc_paths
-        if p.parent.name == str(replica)
-    ]
+    Expected path:
+        results/{pdb_code}/tmp2/cleaned_{pdb_code}_{replica}.xtc
+
+    Also supports multiple matching files:
+        results/{pdb_code}/tmp2/cleaned_{pdb_code}_*.xtc
+    """
+    tmp2_dir = Path("results") / pdb_code / "tmp2"
+
+    if not tmp2_dir.is_dir():
+        raise FileNotFoundError(f"tmp2 dir not found: {tmp2_dir}")
+
+    pattern = f"cleaned_{pdb_code}_{replica}.xtc"
+    replica_paths = sorted(tmp2_dir.glob(pattern))
 
     if not replica_paths:
         raise FileNotFoundError(
-            f"No XTC files found for pdb={pdb_code}, replica={replica}"
+            f"No cleaned XTC files found for pdb={pdb_code}, replica={replica}. "
+            f"Expected: {tmp2_dir / pattern}"
         )
 
     return replica_paths
@@ -250,6 +257,100 @@ def save_json_safe(path: Path, data: dict) -> None:
     with open(path, "w") as f:
         json.dump(data, f, indent=2, default=convert)
 
+def linear_combine_mode_vectors(
+    modes: np.ndarray,
+    mode_ids: np.ndarray,
+    coefficients: np.ndarray,
+    n_atoms: int | None = None,
+) -> np.ndarray:
+    """
+    Explicitly combine mode vectors.
+
+    Supports both shapes:
+
+        modes shape = (n_modes, n_atoms, 3)
+        modes shape = (n_modes, 3*n_atoms)
+
+    Returns:
+        combined_dx_atoms shape = (n_atoms, 3)
+    """
+    selected_modes = modes[mode_ids]
+    coefficients = np.asarray(coefficients, dtype=float)
+
+    if selected_modes.shape[0] != coefficients.shape[0]:
+        raise ValueError(
+            f"Number of modes and coefficients differ: "
+            f"{selected_modes.shape[0]} modes, {coefficients.shape[0]} coefficients"
+        )
+
+    # Case 1: modes are already atom-wise: (K, n_atoms, 3)
+    if selected_modes.ndim == 3:
+        combined = np.einsum(
+            "k,kij->ij",
+            coefficients,
+            selected_modes,
+        )
+        return combined
+
+    # Case 2: modes are flat: (K, 3*n_atoms)
+    if selected_modes.ndim == 2:
+        combined_flat = coefficients @ selected_modes
+
+        if n_atoms is None:
+            if combined_flat.size % 3 != 0:
+                raise ValueError(
+                    f"Flat combined vector length is not divisible by 3: "
+                    f"{combined_flat.size}"
+                )
+            n_atoms = combined_flat.size // 3
+
+        return combined_flat.reshape(n_atoms, 3)
+
+    raise ValueError(
+        f"Unsupported modes shape: {modes.shape}. "
+        "Expected (n_modes, n_atoms, 3) or (n_modes, 3*n_atoms)."
+    )
+
+def extract_combination_coefficients(
+    coeff_df: pd.DataFrame,
+    mode_ids: np.ndarray,
+) -> np.ndarray:
+    """
+    Extract coefficients from fit_mode_combination output.
+
+    Assumes the coefficient table contains one coefficient per mode.
+    """
+    possible_coeff_cols = [
+        "coefficient",
+        "coeff",
+        "weight",
+        "q_nm",
+        "q",
+    ]
+
+    coeff_col = None
+    for col in possible_coeff_cols:
+        if col in coeff_df.columns:
+            coeff_col = col
+            break
+
+    if coeff_col is None:
+        raise KeyError(
+            "Could not find coefficient column in coefficient DataFrame. "
+            f"Available columns: {list(coeff_df.columns)}"
+        )
+
+    if "mode_array_index" in coeff_df.columns:
+        coeff_df = (
+            coeff_df
+            .set_index("mode_array_index")
+            .loc[mode_ids]
+            .reset_index()
+        )
+
+    coefficients = coeff_df[coeff_col].to_numpy(dtype=float)
+
+    return coefficients
 
 def main():
     parser = argparse.ArgumentParser(
@@ -491,13 +592,32 @@ def main():
         disp_mag=disp_mag,
     )
 
-    atom_disp_df = atom_disp_df.sort_values(
+    # This sorted table is convenient for seeing which atoms moved most.
+    atom_disp_ranked_df = atom_disp_df.sort_values(
         "displacement_nm",
         ascending=False,
+    ).copy()
+
+    atom_disp_ranked_df.to_csv(
+        outdir / "atom_displacement_magnitudes.csv",
+        index=False,
     )
 
-    atom_disp_df.to_csv(
-        outdir / "atom_displacement_magnitudes.csv",
+    # This table preserves the vector row order for all protein-heavy vectors.
+    # Row i in any *_dx_all_atoms.npy corresponds to vector_row_index i here.
+    atom_vector_map_df = atom_disp_df.sort_values(
+        "atom_local_index",
+        ascending=True,
+    ).copy()
+
+    atom_vector_map_df.insert(
+        0,
+        "vector_row_index",
+        np.arange(len(atom_vector_map_df)),
+    )
+
+    atom_vector_map_df.to_csv(
+        outdir / "protein_heavy_atom_vector_index_map.csv",
         index=False,
     )
 
@@ -514,13 +634,24 @@ def main():
         n_top=args.top_n,
     )
 
-    selected_atoms_df = atom_disp_df[
-        atom_disp_df["atom_local_index"].isin(top_idx)
-    ].copy()
+    # Preserve the exact row order used by dx_sel and modes_sel.
+    # Row i in any *_dx_selected_atoms.npy corresponds to vector_row_index i here.
+    selected_atoms_df = pd.DataFrame(
+        {
+            "vector_row_index": np.arange(len(top_idx)),
+            "atom_local_index": top_idx,
+        }
+    )
+
+    selected_atoms_df = selected_atoms_df.merge(
+        atom_disp_df,
+        on="atom_local_index",
+        how="left",
+    )
 
     selected_atoms_df = selected_atoms_df.sort_values(
-        "displacement_nm",
-        ascending=False,
+        "vector_row_index",
+        ascending=True,
     )
 
     selected_atoms_df.to_csv(
@@ -615,7 +746,8 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 9b. Test cumulative linear combinations of first N modes
+    # 9b. Test and prepare cumulative linear combinations
+    #     of first N normal modes
     # ------------------------------------------------------------
     print_header("Testing cumulative mode combinations")
 
@@ -633,6 +765,99 @@ def main():
             mode_number_offset=args.mode_number_offset,
         )
 
+        # Save least-squares coefficients for comparison only.
+        # These are NOT used for the explicit combination below.
+        coeff_df_n.to_csv(
+            outdir / f"linear_combination_first_{n_modes}_mode_coefficients.csv",
+            index=False,
+        )
+
+        # Use eigenvalues as the scalar/weight for each mode.
+        # This means:
+        # combined_dx = eigval_0 * mode_0
+        #             + eigval_1 * mode_1
+        #             + ...
+        coefficients_n = eigvals[mode_ids_n].astype(float)
+
+        if coefficients_n.shape[0] != mode_ids_n.shape[0]:
+            raise ValueError(
+                f"Number of eigenvalues and selected modes differ: "
+                f"{coefficients_n.shape[0]} eigenvalues, {mode_ids_n.shape[0]} modes"
+            )
+
+        # Save the actual eigenvalue scalars used.
+        eigval_weight_df = pd.DataFrame(
+            {
+                "mode_array_index": mode_ids_n,
+                "bio3d_mode_number": mode_ids_n + args.mode_number_offset,
+                "eigval_scalar": coefficients_n,
+            }
+        )
+
+        eigval_weight_df.to_csv(
+            outdir / f"linear_combination_first_{n_modes}_eigval_scalars.csv",
+            index=False,
+        )
+
+        # Explicitly combine selected-atom mode vectors using eigenvalues.
+        combined_dx_selected_atoms = linear_combine_mode_vectors(
+            modes=modes_sel,
+            mode_ids=mode_ids_n,
+            coefficients=coefficients_n,
+            n_atoms=len(top_idx),
+        )
+
+        # Explicitly combine all-atom mode vectors using eigenvalues.
+        combined_dx_all_atoms = linear_combine_mode_vectors(
+            modes=modes_atoms,
+            mode_ids=mode_ids_n,
+            coefficients=coefficients_n,
+            n_atoms=n_atoms,
+        )
+
+        # Save raw NumPy vectors.
+        np.save(
+            outdir / f"linear_combination_first_{n_modes}_dx_selected_atoms.npy",
+            combined_dx_selected_atoms,
+        )
+
+        np.save(
+            outdir / f"linear_combination_first_{n_modes}_dx_all_atoms.npy",
+            combined_dx_all_atoms,
+        )
+
+        # Save selected-atom combined vectors with atom metadata.
+        selected_vec_df = selected_atoms_df.copy()
+
+        selected_vec_df["dx"] = combined_dx_selected_atoms[:, 0]
+        selected_vec_df["dy"] = combined_dx_selected_atoms[:, 1]
+        selected_vec_df["dz"] = combined_dx_selected_atoms[:, 2]
+        selected_vec_df["vector_magnitude_nm"] = np.linalg.norm(
+            combined_dx_selected_atoms,
+            axis=1,
+        )
+
+        selected_vec_df.to_csv(
+            outdir / f"linear_combination_first_{n_modes}_dx_selected_atoms_with_metadata.csv",
+            index=False,
+        )
+
+        # Save all-protein-heavy combined vectors with atom metadata.
+        all_vec_df = atom_vector_map_df.copy()
+
+        all_vec_df["dx"] = combined_dx_all_atoms[:, 0]
+        all_vec_df["dy"] = combined_dx_all_atoms[:, 1]
+        all_vec_df["dz"] = combined_dx_all_atoms[:, 2]
+        all_vec_df["vector_magnitude_nm"] = np.linalg.norm(
+            combined_dx_all_atoms,
+            axis=1,
+        )
+
+        all_vec_df.to_csv(
+            outdir / f"linear_combination_first_{n_modes}_dx_all_atoms_with_metadata.csv",
+            index=False,
+        )
+
         cumulative_rows.append(
             {
                 "n_modes": int(n_modes),
@@ -640,20 +865,23 @@ def main():
                 "mode_array_stop_exclusive": int(n_modes),
                 "first_bio3d_mode_number": int(args.mode_number_offset),
                 "last_bio3d_mode_number": int(args.mode_number_offset + n_modes - 1),
-                "cosine_overlap": float(summary_n["cosine_overlap"]),
-                "abs_cosine_overlap": abs(float(summary_n["cosine_overlap"])),
-                "rms_error_nm": float(summary_n["rms_error_nm"]),
+                "combination_scalar_type": "eigval",
+                "eigval_scalars_file": (
+                    f"linear_combination_first_{n_modes}_eigval_scalars.csv"
+                ),
+                "combined_selected_atoms_vector_norm_nm": float(
+                    np.linalg.norm(combined_dx_selected_atoms.reshape(-1))
+                ),
+                "combined_all_atoms_vector_norm_nm": float(
+                    np.linalg.norm(combined_dx_all_atoms.reshape(-1))
+                ),
+                "selected_atoms_metadata_file": (
+                    f"linear_combination_first_{n_modes}_dx_selected_atoms_with_metadata.csv"
+                ),
+                "all_atoms_metadata_file": (
+                    f"linear_combination_first_{n_modes}_dx_all_atoms_with_metadata.csv"
+                ),
             }
-        )
-
-        coeff_df_n.to_csv(
-            outdir / f"linear_combination_first_{n_modes}_mode_coefficients.csv",
-            index=False,
-        )
-
-        np.save(
-            outdir / f"linear_combination_first_{n_modes}_dx_fit.npy",
-            summary_n["dx_fit"],
         )
 
     cumulative_df = pd.DataFrame(cumulative_rows)
@@ -663,7 +891,7 @@ def main():
         index=False,
     )
 
-    print("[INFO] Cumulative first-mode combination fits:")
+    print("[INFO] Cumulative first-mode combinations using eigenvalue scalars:")
     print(cumulative_df.to_string(index=False))
     
     # ------------------------------------------------------------
