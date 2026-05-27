@@ -25,6 +25,8 @@ results/
 plots/
 *.npy
 *.npz
+farthest_com_displacement_results/
+combined_nm_visualisation_results/
 
 # Temporary / cluster
 /tmp/
