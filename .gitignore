@@ -7,6 +7,7 @@ __pycache__/
 .venv
 env/
 venv/
+*/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -47,7 +48,7 @@ slurm-*.log
 *.temp.*.*
 *.RData
 *.Rhistory
-
+*.pdb
 # OS
 .DS_Store
 
