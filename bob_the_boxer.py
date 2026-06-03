@@ -1,4 +1,4 @@
-#bob_the_builder.py
+#bob_the_boxer.py
 #!/usr/bin/env python3
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import mdtraj as md
 import numpy as np
 
 """
-python bob_the_builder.py \
+python bob_the_boxer.py \
   --target test.pdb \
   --helpers nma_helper_7lak/*.pdb \
   --reference test.pdb \
