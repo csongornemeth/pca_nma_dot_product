@@ -12,13 +12,13 @@ import numpy as np
 
 """
 python bob_the_boxer.py \
-  --target test.pdb \
+  --target target_7lak.pdb \
   --helpers nma_helper_7lak/*.pdb \
   --reference test.pdb \
   --align-selection "backbone" \
   --fit-selection "protein and not element H" \
   --center-selection "protein" \
-  --padding 1.3 \
+  --padding 0.7 \
   --outdir common_box_7lak_test \
   --save-helpers
 """

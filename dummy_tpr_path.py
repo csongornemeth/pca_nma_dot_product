@@ -8,15 +8,48 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from io_utils import get_pdb_dir, collect_xtc_paths, print_header
-
 """
+Clean/repair replica XTCs for the new solvated systems.
+
+Expected layout:
+
+solvate_trial/{pdb}/
+├── replicas/
+│   ├── rep1/
+│   │   ├── prod_rep1.xtc
+│   │   ├── prod_rep1.tpr
+│   ├── rep2/
+│   │   ├── prod_rep2.xtc
+│   │   ├── prod_rep2.tpr
+│   └── ...
+├── replica_index.ndx
+├── rebuilt_autolig_build/
+└── tmp/
+
 Run examples:
-python dummy_tpr_path.py --pdb 3b9c
-python dummy_tpr.py --pdb 3ef4 --group Protein-H
+
+python clean_solvate_trial_xtcs.py --pdb 7lak --group solute-H --wipe
+
+python dummy_tpr_path.py \
+  --pdb 7lak \
+  --xtc-pattern "prod_rep*.xtc" \
+  --group solute-H \
+  --wipe
+
+python clean_solvate_trial_xtcs.py \
+  --pdb 7lak \
+  --xtc-pattern "md_rep*.xtc" \
+  --group solute-H \
+  --wipe
 """
 
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
+
+
+def print_header(title: str):
+    print("\n" + "=" * 60)
+    print(title)
+    print("=" * 60)
 
 
 def run_cmd(cmd, input_text=None):
@@ -28,12 +61,12 @@ def run_cmd(cmd, input_text=None):
     )
     if result.returncode != 0:
         print("\n[CMD FAILED]")
-        print("Command:", " ".join(cmd))
+        print("Command:", " ".join(map(str, cmd)))
         print("\n[STDOUT]")
         print(result.stdout)
         print("\n[STDERR]")
         print(result.stderr)
-        raise RuntimeError(f"Failed: {' '.join(cmd)}")
+        raise RuntimeError(f"Failed: {' '.join(map(str, cmd))}")
     return result
 
 
@@ -46,9 +79,18 @@ def run_cmd_result(cmd, input_text=None):
     )
 
 
-# -------------------------
-# CLEANUP LOGIC
-# -------------------------
+def rep_sort_key(replica_id: str):
+    """
+    Sorts:
+      rep1, rep2, ..., rep10
+    correctly.
+    """
+    m = re.search(r"(\d+)$", replica_id)
+    if m:
+        return int(m.group(1))
+    return replica_id
+
+
 def cleanup_tmp_dir(tmp_dir: Path, pdb_code: str, wipe: bool):
     print_header("Cleanup")
 
@@ -80,32 +122,6 @@ def cleanup_tmp_dir(tmp_dir: Path, pdb_code: str, wipe: bool):
             removed += 1
 
     print(f"[INFO] Removed {removed} leftover files")
-
-
-# -------------------------
-def make_dummy_tpr(gmx, build_dir, dummy_tpr, group_name):
-    print_header(f"Creating dummy.tpr with group {group_name}")
-
-    cmd = [
-        gmx, "convert-tpr",
-        "-s", str(build_dir / "nvt.tpr"),
-        "-n", str(build_dir / "index.ndx"),
-        "-o", str(dummy_tpr),
-    ]
-    run_cmd(cmd, input_text=f"{group_name}\n")
-
-
-def group_xtcs_by_replica(xtc_paths):
-    replica_groups = defaultdict(list)
-
-    for xtc in xtc_paths:
-        replica_id = xtc.parent.name
-        replica_groups[replica_id].append(xtc)
-
-    for r in replica_groups:
-        replica_groups[r] = sorted(replica_groups[r])
-
-    return replica_groups
 
 
 def parse_index_group_sizes(index_file: Path) -> dict[str, int]:
@@ -156,27 +172,72 @@ def get_xtc_atom_count(gmx: str, xtc_path: Path) -> int:
     print("[DEBUG] gmx check output:")
     print(text)
 
-    raise RuntimeError(
-        f"Could not determine atom count from XTC: {xtc_path}"
-    )
+    raise RuntimeError(f"Could not determine atom count from XTC: {xtc_path}")
 
 
-def detect_matching_group(gmx: str, build_dir: Path, replica_groups, user_group: str | None):
+def group_xtcs_by_replica(xtc_paths):
+    replica_groups = defaultdict(list)
+
+    for xtc in xtc_paths:
+        replica_id = xtc.parent.name
+        replica_groups[replica_id].append(xtc)
+
+    for r in replica_groups:
+        replica_groups[r] = sorted(replica_groups[r])
+
+    return replica_groups
+
+
+def find_source_tpr(out_root: Path, replica_groups) -> Path:
+    """
+    Use first available replica TPR.
+    Priority:
+      prod_rep*.tpr
+      md_rep*.tpr
+      prep_rep*.tpr
+      *.tpr
+    """
+    first_replica = sorted(replica_groups, key=rep_sort_key)[0]
+    rep_dir = out_root / "replicas" / first_replica
+
+    patterns = [
+        "prod_rep*.tpr",
+        "md_rep*.tpr",
+        "prep_rep*.tpr",
+        "*.tpr",
+    ]
+
+    for pattern in patterns:
+        hits = sorted(rep_dir.glob(pattern))
+        if hits:
+            return hits[0]
+
+    raise RuntimeError(f"No .tpr file found in {rep_dir}")
+
+
+def detect_matching_group(
+    gmx: str,
+    index_file: Path,
+    replica_groups,
+    user_group: str | None,
+):
     print_header("Detecting correct group")
 
     if not replica_groups:
         raise RuntimeError("No XTC files found")
 
-    first_replica = sorted(replica_groups, key=lambda x: int(x))[0]
+    first_replica = sorted(replica_groups, key=rep_sort_key)[0]
     first_xtc = replica_groups[first_replica][0]
 
     xtc_natoms = get_xtc_atom_count(gmx, first_xtc)
+
+    print(f"[INFO] First replica: {first_replica}")
+    print(f"[INFO] First XTC: {first_xtc}")
     print(f"[INFO] XTC atom count: {xtc_natoms}")
 
-    index_file = build_dir / "index.ndx"
     group_sizes = parse_index_group_sizes(index_file)
 
-    candidate_groups = ["Protein-H", "solute-H", "System"]
+    candidate_groups = ["solute-H", "Protein-H", "solute", "System"]
     if user_group is not None:
         candidate_groups = [user_group]
 
@@ -200,12 +261,42 @@ def detect_matching_group(gmx: str, build_dir: Path, replica_groups, user_group:
 
     raise RuntimeError(
         f"No matching group found for XTC atom count {xtc_natoms}. "
-        f"Candidate sizes: " +
-        ", ".join(f"{g}={group_sizes.get(g, 'missing')}" for g in candidate_groups)
+        f"Candidate sizes: "
+        + ", ".join(f"{g}={group_sizes.get(g, 'missing')}" for g in candidate_groups)
     )
 
 
-def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, tmp_dir):
+def make_dummy_tpr(
+    gmx: str,
+    source_tpr: Path,
+    index_file: Path,
+    dummy_tpr: Path,
+    group_name: str,
+):
+    print_header(f"Creating dummy.tpr with group {group_name}")
+
+    cmd = [
+        gmx,
+        "convert-tpr",
+        "-s",
+        str(source_tpr),
+        "-n",
+        str(index_file),
+        "-o",
+        str(dummy_tpr),
+    ]
+
+    run_cmd(cmd, input_text=f"{group_name}\n")
+
+
+def clean_replica(
+    gmx: str,
+    pdb_code: str,
+    replica_id: str,
+    xtc_files,
+    dummy_tpr: Path,
+    tmp_dir: Path,
+):
     print_header(f"Replica {replica_id}")
 
     temp_files = []
@@ -219,31 +310,56 @@ def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, t
         # Step 1: make molecules whole
         run_cmd(
             [
-                gmx, "trjconv",
-                "-s", str(dummy_tpr),
-                "-f", str(xtc),
-                "-o", str(mol_xtc),
-                "-pbc", "whole",
+                gmx,
+                "trjconv",
+                "-s",
+                str(dummy_tpr),
+                "-f",
+                str(xtc),
+                "-o",
+                str(mol_xtc),
+                "-pbc",
+                "whole",
             ],
-            input_text=f"System\nSystem\n",
+            input_text="System\nSystem\n",
         )
 
-        # Step 2: cluster chains together
         run_cmd(
             [
-                gmx, "trjconv",
-                "-s", str(dummy_tpr),
-                "-f", str(mol_xtc),
-                "-o", str(tmp_xtc),
-                "-pbc", "nojump",
+                gmx,
+                "trjconv",
+                "-s",
+                str(dummy_tpr),
+                "-f",
+                str(xtc),
+                "-o",
+                str(mol_xtc),
+                "-pbc",
+                "whole",
+            ],
+            input_text="System\nSystem\n",
+        )
+
+        # Step 2: remove jumps and center
+        run_cmd(
+            [
+                gmx,
+                "trjconv",
+                "-s",
+                str(dummy_tpr),
+                "-f",
+                str(mol_xtc),
+                "-o",
+                str(tmp_xtc),
+                "-pbc",
+                "nojump",
                 "-center",
             ],
-            input_text=f"System\nSystem\n",
+            input_text="System\nSystem\n",
         )
 
         temp_files.append(str(tmp_xtc))
 
-        # cleanup intermediate
         try:
             os.remove(mol_xtc)
         except FileNotFoundError:
@@ -263,22 +379,55 @@ def clean_replica(gmx, pdb_code, replica_id, xtc_files, dummy_tpr, group_name, t
     return out_xtc
 
 
-# -------------------------
 def main():
     parser = argparse.ArgumentParser()
+
     parser.add_argument("--pdb", required=True)
-    parser.add_argument("--group", choices=["Protein-H", "solute-H", "System"], default=None)
+
+    parser.add_argument(
+        "--root",
+        default="solvate_trial",
+        help="Root folder containing {pdb}/replicas. Default: solvate_trial",
+    )
+
+    parser.add_argument(
+        "--xtc-pattern",
+        default="prod_rep*.xtc",
+        help="XTC pattern inside each replica folder. Default: prod_rep*.xtc",
+    )
+
+    parser.add_argument(
+        "--group",
+        choices=["Protein-H", "solute-H", "solute", "System"],
+        default=None,
+        help="Force group. If omitted, auto-detect from XTC atom count.",
+    )
+
     parser.add_argument("--gmx", default=GMX_DEFAULT)
-    parser.add_argument("--wipe", action="store_true", help="Delete all files in tmp before running")
+
+    parser.add_argument(
+        "--wipe",
+        action="store_true",
+        help="Delete all files in tmp before running",
+    )
 
     args = parser.parse_args()
 
     pdb_code = args.pdb.lower()
-    pdb_dir = get_pdb_dir(pdb_code)
-    build_dir = pdb_dir / "build"
 
-    out_root = Path(f"MD_sims/{pdb_code}")
+    out_root = Path(args.root) / pdb_code
+    replicas_dir = out_root / "replicas"
+    index_file = out_root / "rebuilt_autolig_build" / "index.ndx"
     tmp_dir = out_root / "tmp"
+
+    if not out_root.exists():
+        raise RuntimeError(f"System folder not found: {out_root}")
+
+    if not replicas_dir.exists():
+        raise RuntimeError(f"Replicas directory not found: {replicas_dir}")
+
+    if not index_file.exists():
+        raise RuntimeError(f"Index file not found: {index_file}")
 
     out_root.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -286,36 +435,56 @@ def main():
     cleanup_tmp_dir(tmp_dir, pdb_code, wipe=args.wipe)
 
     print_header("Paths")
-    print(f"PDB dir: {pdb_dir}")
-    print(f"TMP dir: {tmp_dir}")
-    print(f"GROMACS: {args.gmx}")
+    print(f"PDB/system: {pdb_code}")
+    print(f"Root:       {out_root}")
+    print(f"Replicas:   {replicas_dir}")
+    print(f"Index:      {index_file}")
+    print(f"TMP dir:    {tmp_dir}")
+    print(f"GROMACS:    {args.gmx}")
+    print(f"Pattern:    {args.xtc_pattern}")
 
-    xtc_paths = sorted(
-        Path(f"MD_sims/{pdb_code}/validation").rglob("*.xtc")
-)
+    xtc_paths = sorted(replicas_dir.glob(f"rep*/{args.xtc_pattern}"))
+
+    if not xtc_paths:
+        raise RuntimeError(
+            f"No XTC files found with pattern: {replicas_dir}/rep*/{args.xtc_pattern}"
+        )
+
+    print_header("Found XTC files")
+    for x in xtc_paths:
+        print(x)
 
     replica_groups = group_xtcs_by_replica(xtc_paths)
 
     group_name = detect_matching_group(
         args.gmx,
-        build_dir,
+        index_file,
         replica_groups,
         args.group,
     )
 
-    print(f"Group:   {group_name}")
+    print(f"Group: {group_name}")
+
+    source_tpr = find_source_tpr(out_root, replica_groups)
+    print(f"Source TPR: {source_tpr}")
 
     dummy_tpr = tmp_dir / "dummy.tpr"
-    make_dummy_tpr(args.gmx, build_dir, dummy_tpr, group_name)
 
-    for replica_id in sorted(replica_groups, key=lambda x: int(x)):
+    make_dummy_tpr(
+        args.gmx,
+        source_tpr,
+        index_file,
+        dummy_tpr,
+        group_name,
+    )
+
+    for replica_id in sorted(replica_groups, key=rep_sort_key):
         clean_replica(
             args.gmx,
             pdb_code,
             replica_id,
             replica_groups[replica_id],
             dummy_tpr,
-            group_name,
             tmp_dir,
         )
 

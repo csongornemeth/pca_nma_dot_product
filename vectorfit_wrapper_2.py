@@ -14,10 +14,15 @@ from pc1_nma_projection import (
 )
 
 """
-python vectorfit_wrapper_2.py \
-  --pdb 7lak \
-  --replica 5 \
-  --eigenvalue-coef-scheme inverse_sqrt
+python vectorfit_wrapper_2.py\
+    --pdb 7lak\
+    --replica 5\
+    --eigenvalue-coef-scheme inverse_sqrt\
+    --skip-existing-nma\
+    --n-modes 1\
+    --pc-number 1\
+    --mode-start 6\
+    --amplitude 10
 """
 
 def get_pc_vector_from_eigenvectors(eigenvectors: np.ndarray, expected_dof: int, pc_index: int):

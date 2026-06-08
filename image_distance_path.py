@@ -12,7 +12,7 @@ from io_utils import get_pdb_dir, print_header
 
 """
 Run example:
-python image_distance.py --pdb 3b9c --group System
+python image_distance_path.py --pdb 7lak --group System
 """
 
 GMX_DEFAULT = "/work001/software/gromacs-bekker-2025/build/bin/gmx"
@@ -33,7 +33,7 @@ def run_cmd(cmd, input_text=None):
 
 
 def find_cleaned_xtcs(tmp_dir: Path, pdb_code: str):
-    xtc_dir = Path(f"MD_sims/{pdb_code}/tmp/")
+    xtc_dir = Path(f"solvate_trial/{pdb_code}/tmp/")
     return sorted(xtc_dir.glob("*.xtc"))
 
 
@@ -114,7 +114,7 @@ def main():
     pdb_code = args.pdb.lower()
     pdb_dir = get_pdb_dir(pdb_code)
 
-    out_root = Path(f"MD_sims/{pdb_code}")
+    out_root = Path(f"solvate_trial/{pdb_code}")
     tmp_dir = out_root / "tmp"
     dummy_tpr = tmp_dir / "dummy.tpr"
 
