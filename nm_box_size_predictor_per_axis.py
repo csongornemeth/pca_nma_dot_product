@@ -1,23 +1,23 @@
+#!/usr/bin/env python3
+# nm_box_size_predictor_per_axis.py
+
 """
-python bob_the_nm_boxer.py \
-  --pdb 7lak \
-  --target target_7lak.pdb \
-  --reference test.pdb \
-  --original-gro prep.gro \
+python nm_box_size_predictor_per_axis.py \
+  --pdb 8gs9 \
+  --target target_8gs9.pdb \
+  --reference target_8gs9.pdb \
+  --original-gro 8gs9_prod.part0001.gro \
   --run-nma \
   --mode-start 6 \
   --n-modes 10 \
   --skip-existing-nma \
-  --amplitudes 0 0.5 1 1.5 2 2.4 2.5 3 3.5 4 4.5 5 5.5\
-  --paddings 0.7\
-  --target-fit-selection "(protein and not element H) or (resname IBI and not element H)"\
-  --plot-overlay\
-  --save-all-trials\
+  --amplitudes 0 0.5 1 1.5 2 2.4 2.5 3 3.5 4 4.5 5 5.5 6.0 7.0 10.0 \
+  --paddings 0.7 \
+  --target-fit-selection "(protein and not element H)" \
+  --plot-overlay \
+  --save-all-trials \
   --save-best-helpers
-  --volume-weight 1.0
-"""
-#!/usr/bin/env python3
-# nm_box_size_predictor.py
+  """
 
 from __future__ import annotations
 
@@ -329,6 +329,7 @@ def fit_common_box(
     helper_fit_selection: str,
     center_selection: str,
     padding: float,
+    fixed_axes: np.ndarray | None = None,
 ) -> dict:
 
     (
@@ -387,7 +388,12 @@ def fit_common_box(
         axis=0,
     )
 
-    axes = pca_axes(point_cloud)
+    if fixed_axes is None:
+        axes = pca_axes(point_cloud)
+    else:
+        axes = np.asarray(fixed_axes, dtype=float)
+        if axes.shape != (3, 3):
+            raise ValueError(f"fixed_axes must have shape (3, 3), got {axes.shape}")
 
     box_info = oriented_box_from_points(
         points=point_cloud,
@@ -565,34 +571,41 @@ def score_box(
     undersize_weight: float = 1000.0,
     undersize_tolerance: float = 0.0,
 ) -> dict:
+    """
+    Score a candidate box by comparing x/y/z separately.
+
+    Important difference from the old version:
+        - no sorting of box lengths
+        - each direction is compared directly: Lx to Lx, Ly to Ly, Lz to Lz
+        - any side shorter than the target gets a strong penalty
+
+    Positive error  = predicted side is longer than target side.
+    Negative error  = predicted side is shorter than target side.
+    Shortfall       = max(target - predicted, 0).
+    """
 
     predicted_lengths = np.asarray(predicted_lengths, dtype=float)
     target_lengths = np.asarray(target_lengths, dtype=float)
 
-    # Compare x, y, z separately.
+    if predicted_lengths.shape != (3,):
+        raise ValueError(f"predicted_lengths must have shape (3,), got {predicted_lengths.shape}")
+
+    if target_lengths.shape != (3,):
+        raise ValueError(f"target_lengths must have shape (3,), got {target_lengths.shape}")
+
     length_errors = predicted_lengths - target_lengths
-
-    length_rmse = float(
-        np.sqrt(np.mean(length_errors ** 2))
-    )
-
-    # Positive only where predicted side is shorter than target side.
     side_shortfalls = np.maximum(target_lengths - predicted_lengths, 0.0)
 
+    length_rmse = float(np.sqrt(np.mean(length_errors ** 2)))
     max_shortfall = float(np.max(side_shortfalls))
     total_shortfall = float(np.sum(side_shortfalls))
-
-    is_undersized = bool(np.any(side_shortfalls > undersize_tolerance))
+    is_undersized = bool(np.any(side_shortfalls > float(undersize_tolerance)))
 
     predicted_volume = float(np.prod(predicted_lengths))
     target_volume = float(np.prod(target_lengths))
 
-    volume_rel_error = float(
-        abs(predicted_volume - target_volume) / target_volume
-    )
-
-    # Heavy penalty if any individual side is too short.
-    undersize_penalty = float(undersize_weight * total_shortfall)
+    volume_rel_error = float(abs(predicted_volume - target_volume) / target_volume)
+    undersize_penalty = float(float(undersize_weight) * total_shortfall)
 
     score = float(
         length_rmse
@@ -620,6 +633,154 @@ def score_box(
         "target_lengths_nm": target_lengths.tolist(),
     }
 
+
+def select_best_per_axis(
+    rows: list[dict],
+    target_box_lengths: np.ndarray,
+    undersize_tolerance: float = 0.0,
+) -> dict:
+    """
+    Select the best one-mode/amplitude candidate separately for x, y, and z.
+
+    A candidate is acceptable for an axis only if that side is not shorter than
+    the target side by more than undersize_tolerance.
+
+    Among acceptable candidates, the best candidate for an axis is the one with
+    the smallest positive/absolute error for that same axis.
+    """
+
+    target_box_lengths = np.asarray(target_box_lengths, dtype=float)
+
+    axis_specs = [
+        ("x", "pred_Lx_nm", "target_Lx_nm", 0),
+        ("y", "pred_Ly_nm", "target_Ly_nm", 1),
+        ("z", "pred_Lz_nm", "target_Lz_nm", 2),
+    ]
+
+    selected = {}
+
+    for axis_name, pred_key, target_key, _axis_i in axis_specs:
+        acceptable = []
+
+        for row in rows:
+            pred = float(row[pred_key])
+            target = float(row[target_key])
+            error = pred - target
+
+            if error < -float(undersize_tolerance):
+                continue
+
+            candidate = dict(row)
+            candidate[f"{axis_name}_axis_error_nm"] = error
+            candidate[f"{axis_name}_axis_abs_error_nm"] = abs(error)
+            acceptable.append(candidate)
+
+        if not acceptable:
+            raise RuntimeError(
+                f"No acceptable candidate found for {axis_name}-axis. "
+                "Try larger amplitudes and/or larger padding."
+            )
+
+        selected[axis_name] = min(
+            acceptable,
+            key=lambda r: r[f"{axis_name}_axis_abs_error_nm"],
+        )
+
+    final_lengths = np.array(
+        [
+            float(selected["x"]["pred_Lx_nm"]),
+            float(selected["y"]["pred_Ly_nm"]),
+            float(selected["z"]["pred_Lz_nm"]),
+        ],
+        dtype=float,
+    )
+
+    # Absolute safety: the final assembled box is never allowed to be shorter
+    # than the original/reference GRO box in any direction.
+    final_lengths = np.maximum(final_lengths, target_box_lengths)
+
+    return {
+        "selected_x": selected["x"],
+        "selected_y": selected["y"],
+        "selected_z": selected["z"],
+        "final_lengths_nm": final_lengths.tolist(),
+        "target_lengths_nm": target_box_lengths.tolist(),
+        "final_volume_nm3": float(np.prod(final_lengths)),
+        "target_volume_nm3": float(np.prod(target_box_lengths)),
+        "final_minus_target_nm": (final_lengths - target_box_lengths).tolist(),
+    }
+
+
+def transform_target_to_final_box(
+    target: md.Trajectory,
+    reference: md.Trajectory,
+    common_align_selection: str,
+    target_fit_selection: str,
+    center_selection: str,
+    axes: np.ndarray,
+    lengths: np.ndarray,
+) -> dict:
+    """
+    Align target to reference, centre it by COM, rotate into a fixed box frame,
+    centre it inside the final per-axis box, and attach orthorhombic box vectors.
+    """
+
+    axes = np.asarray(axes, dtype=float)
+    lengths = np.asarray(lengths, dtype=float)
+
+    if axes.shape != (3, 3):
+        raise ValueError(f"axes must have shape (3, 3), got {axes.shape}")
+
+    if lengths.shape != (3,):
+        raise ValueError(f"lengths must have shape (3,), got {lengths.shape}")
+
+    ref_map = build_atom_key_map(reference, common_align_selection)
+    target_map = build_atom_key_map(target, common_align_selection)
+
+    common_keys = sorted(set(ref_map.keys()) & set(target_map.keys()))
+
+    if not common_keys:
+        raise ValueError(f"No common atoms found for selection: {common_align_selection}")
+
+    ref_align_idx = np.array([ref_map[k] for k in common_keys], dtype=int)
+    target_align_idx = np.array([target_map[k] for k in common_keys], dtype=int)
+
+    target_aligned = target[:]
+    target_aligned.superpose(
+        reference,
+        frame=0,
+        atom_indices=target_align_idx,
+        ref_atom_indices=ref_align_idx,
+    )
+
+    target_center_indices = select_atoms(target_aligned, center_selection)
+    target_centred = centre_by_com_single(target_aligned, target_center_indices)
+
+    target_fit_indices = select_atoms(target_centred, target_fit_selection)
+    target_fit_points = target_centred.xyz[0, target_fit_indices, :]
+    projected_fit = target_fit_points @ axes.T
+
+    mins = projected_fit.min(axis=0)
+    maxs = projected_fit.max(axis=0)
+    box_center_projected = 0.5 * (mins + maxs)
+
+    target_box_frame = transform_to_box_frame(
+        traj=target_centred,
+        axes=axes,
+        box_center_projected=box_center_projected,
+        lengths=lengths,
+    )
+
+    box_vectors = make_box_vectors_from_lengths(lengths)
+    target_boxed = set_unitcell_vectors(target_box_frame, box_vectors)
+
+    return {
+        "target_boxed": target_boxed,
+        "target_fit_indices": target_fit_indices,
+        "box_vectors": box_vectors,
+        "box_center_projected": box_center_projected,
+        "common_align_atoms": len(common_keys),
+    }
 
 # =============================================================================
 # Plotting
@@ -811,41 +972,38 @@ def write_sweep_results_csv(rows: list[dict], path: Path) -> None:
 
     fieldnames = [
         "rank",
+        "trial",
+        "bio3d_mode_number",
+        "mode_index_zero_based",
         "amplitude_nm",
         "padding_nm",
         "score",
         "length_rmse_nm",
         "volume_rel_error",
-
         "undersize_penalty",
         "max_shortfall_nm",
         "total_shortfall_nm",
         "is_undersized",
-
         "x_shortfall_nm",
         "y_shortfall_nm",
         "z_shortfall_nm",
-
         "x_error_nm",
         "y_error_nm",
         "z_error_nm",
-
         "predicted_volume_nm3",
         "target_volume_nm3",
-
         "pred_Lx_nm",
         "pred_Ly_nm",
         "pred_Lz_nm",
-
         "target_Lx_nm",
         "target_Ly_nm",
         "target_Lz_nm",
-
         "n_helpers",
         "mode_start_zero_based",
         "n_modes",
         "first_bio3d_mode",
         "last_bio3d_mode",
+        "common_align_atoms",
     ]
 
     with open(path, "w", newline="") as f:
@@ -942,6 +1100,20 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Weight for relative volume error in score.",
+    )
+
+    parser.add_argument(
+        "--undersize-weight",
+        type=float,
+        default=1000.0,
+        help="Penalty weight for total shortfall in nm. Larger = stricter rejection of short sides.",
+    )
+
+    parser.add_argument(
+        "--undersize-tolerance",
+        type=float,
+        default=0.0,
+        help="Allowed side-specific shortfall in nm before a candidate is considered undersized.",
     )
 
     parser.add_argument(
@@ -1125,145 +1297,214 @@ def main() -> None:
     print("")
 
     # -------------------------------------------------------------------------
-    # 5. Sweep amplitudes and paddings
+    # 5. Build one fixed PCA box frame for the whole sweep
     # -------------------------------------------------------------------------
 
-    rows = []
-    trial_records = []
-    best = None
+    # This is important for the per-axis method.  If each one-mode trial were
+    # allowed to define its own PCA axes, then Lx from one trial and Ly from
+    # another trial would not necessarily refer to the same directions.
+    # Therefore, we first define a fixed box frame from all selected modes at
+    # the largest tested amplitude, and all later trials use this same frame.
 
-    trial_counter = 0
+    max_amplitude = float(max(args.amplitudes))
 
-    for amplitude in args.amplitudes:
-        print(f"[Amplitude] {amplitude} nm")
+    print("[Fixed box frame]")
+    print(
+        "  Building fixed axes from all selected modes "
+        f"at max amplitude {max_amplitude} nm."
+    )
 
-        helpers, helper_metadata = make_nm_helpers(
-            helper_reference=helper_reference,
-            nma_modes=nma_modes,
-            mode_start=args.mode_start,
-            n_modes=args.n_modes,
-            amplitude=amplitude,
-        )
+    fixed_helpers, fixed_helper_metadata = make_nm_helpers(
+        helper_reference=helper_reference,
+        nma_modes=nma_modes,
+        mode_start=args.mode_start,
+        n_modes=args.n_modes,
+        amplitude=max_amplitude,
+    )
 
-        print(f"  generated helpers: {len(helpers)}")
+    fixed_fit = fit_common_box(
+        target=target,
+        helpers=fixed_helpers,
+        reference=reference,
+        common_align_selection=args.common_align_selection,
+        target_fit_selection=args.target_fit_selection,
+        helper_fit_selection=args.helper_fit_selection,
+        center_selection=args.center_selection,
+        padding=0.0,
+        fixed_axes=None,
+    )
 
-        for padding in args.paddings:
-            trial_counter += 1
+    fixed_axes = fixed_fit["axes"]
+    np.save(raw_data_dir / "fixed_box_axes_rows.npy", fixed_axes)
 
-            fit = fit_common_box(
-                target=target,
-                helpers=helpers,
-                reference=reference,
-                common_align_selection=args.common_align_selection,
-                target_fit_selection=args.target_fit_selection,
-                helper_fit_selection=args.helper_fit_selection,
-                center_selection=args.center_selection,
-                padding=padding,
-            )
-
-            predicted_lengths = fit["lengths"]
-
-            score_info = score_box(
-                predicted_lengths=predicted_lengths,
-                target_lengths=target_box_lengths,
-                volume_weight=args.volume_weight,
-            )
-
-            row = {
-                "trial": trial_counter,
-                "amplitude_nm": float(amplitude),
-                "padding_nm": float(padding),
-
-                "score": score_info["score"],
-                "length_rmse_nm": score_info["length_rmse_nm"],
-                "volume_rel_error": score_info["volume_rel_error"],
-
-                "undersize_penalty": score_info["undersize_penalty"],
-                "max_shortfall_nm": score_info["max_shortfall_nm"],
-                "total_shortfall_nm": score_info["total_shortfall_nm"],
-                "is_undersized": score_info["is_undersized"],
-
-                "x_shortfall_nm": score_info["x_shortfall_nm"],
-                "y_shortfall_nm": score_info["y_shortfall_nm"],
-                "z_shortfall_nm": score_info["z_shortfall_nm"],
-
-                "x_error_nm": score_info["x_error_nm"],
-                "y_error_nm": score_info["y_error_nm"],
-                "z_error_nm": score_info["z_error_nm"],
-
-                "predicted_volume_nm3": score_info["predicted_volume_nm3"],
-                "target_volume_nm3": score_info["target_volume_nm3"],
-
-                "pred_Lx_nm": float(predicted_lengths[0]),
-                "pred_Ly_nm": float(predicted_lengths[1]),
-                "pred_Lz_nm": float(predicted_lengths[2]),
-
-                "target_Lx_nm": float(target_box_lengths[0]),
-                "target_Ly_nm": float(target_box_lengths[1]),
-                "target_Lz_nm": float(target_box_lengths[2]),
-
-                "n_helpers": len(helpers),
+    with open(raw_data_dir / "fixed_box_frame_summary.json", "w") as f:
+        json.dump(
+            {
+                "method": "PCA axes from target plus all selected NM helpers at max amplitude",
+                "max_amplitude_nm": max_amplitude,
                 "mode_start_zero_based": int(args.mode_start),
                 "n_modes": int(args.n_modes),
                 "first_bio3d_mode": int(args.mode_start + 1),
                 "last_bio3d_mode": int(args.mode_start + args.n_modes),
+                "axes_rows": fixed_axes.tolist(),
+                "helper_metadata": fixed_helper_metadata,
+            },
+            f,
+            indent=2,
+        )
 
-                "box_lengths_nm": predicted_lengths.tolist(),
-                "box_extents_nm": fit["box_info"]["extents"].tolist(),
-                "box_axes_rows": fit["axes"].tolist(),
-                "box_vectors_nm": fit["box_vectors"].tolist(),
-                "common_align_atoms": int(fit["common_align_atoms"]),
-            }
+    print("  fixed axes rows:")
+    print(fixed_axes)
+    print("")
 
-            rows.append(row)
+    # -------------------------------------------------------------------------
+    # 6. Per-mode/per-amplitude sweep using the fixed box frame
+    # -------------------------------------------------------------------------
 
-            trial_record = {
-                "row": row,
-                "helper_metadata": helper_metadata,
-            }
+    rows = []
+    trial_records = []
+    best_global = None
 
-            trial_records.append(trial_record)
+    trial_counter = 0
+    mode_stop = args.mode_start + args.n_modes
 
-            if best is None or row["score"] < best["row"]["score"]:
-                best = {
+    for mode_index in range(args.mode_start, mode_stop):
+        bio3d_mode_number = mode_index + 1
+
+        print(f"[Mode] Bio3D mode {bio3d_mode_number} / zero-based {mode_index}")
+
+        for amplitude in args.amplitudes:
+            print(f"  [Amplitude] {amplitude} nm")
+
+            # One trial now contains only one NM, plus and minus.
+            # This lets each axis later choose its own best NM/amplitude.
+            helpers, helper_metadata = make_nm_helpers(
+                helper_reference=helper_reference,
+                nma_modes=nma_modes,
+                mode_start=mode_index,
+                n_modes=1,
+                amplitude=amplitude,
+            )
+
+            for padding in args.paddings:
+                trial_counter += 1
+
+                fit = fit_common_box(
+                    target=target,
+                    helpers=helpers,
+                    reference=reference,
+                    common_align_selection=args.common_align_selection,
+                    target_fit_selection=args.target_fit_selection,
+                    helper_fit_selection=args.helper_fit_selection,
+                    center_selection=args.center_selection,
+                    padding=padding,
+                    fixed_axes=fixed_axes,
+                )
+
+                predicted_lengths = fit["lengths"]
+
+                score_info = score_box(
+                    predicted_lengths=predicted_lengths,
+                    target_lengths=target_box_lengths,
+                    volume_weight=args.volume_weight,
+                    undersize_weight=args.undersize_weight,
+                    undersize_tolerance=args.undersize_tolerance,
+                )
+
+                row = {
+                    "trial": trial_counter,
+                    "bio3d_mode_number": int(bio3d_mode_number),
+                    "mode_index_zero_based": int(mode_index),
+                    "amplitude_nm": float(amplitude),
+                    "padding_nm": float(padding),
+
+                    "score": score_info["score"],
+                    "length_rmse_nm": score_info["length_rmse_nm"],
+                    "volume_rel_error": score_info["volume_rel_error"],
+                    "undersize_penalty": score_info["undersize_penalty"],
+                    "max_shortfall_nm": score_info["max_shortfall_nm"],
+                    "total_shortfall_nm": score_info["total_shortfall_nm"],
+                    "is_undersized": score_info["is_undersized"],
+
+                    "x_shortfall_nm": score_info["x_shortfall_nm"],
+                    "y_shortfall_nm": score_info["y_shortfall_nm"],
+                    "z_shortfall_nm": score_info["z_shortfall_nm"],
+                    "x_error_nm": score_info["x_error_nm"],
+                    "y_error_nm": score_info["y_error_nm"],
+                    "z_error_nm": score_info["z_error_nm"],
+
+                    "predicted_volume_nm3": score_info["predicted_volume_nm3"],
+                    "target_volume_nm3": score_info["target_volume_nm3"],
+
+                    "pred_Lx_nm": float(predicted_lengths[0]),
+                    "pred_Ly_nm": float(predicted_lengths[1]),
+                    "pred_Lz_nm": float(predicted_lengths[2]),
+                    "target_Lx_nm": float(target_box_lengths[0]),
+                    "target_Ly_nm": float(target_box_lengths[1]),
+                    "target_Lz_nm": float(target_box_lengths[2]),
+
+                    "n_helpers": len(helpers),
+                    "mode_start_zero_based": int(mode_index),
+                    "n_modes": 1,
+                    "first_bio3d_mode": int(bio3d_mode_number),
+                    "last_bio3d_mode": int(bio3d_mode_number),
+
+                    "box_lengths_nm": predicted_lengths.tolist(),
+                    "box_extents_nm": fit["box_info"]["extents"].tolist(),
+                    "box_axes_rows": fit["axes"].tolist(),
+                    "box_vectors_nm": fit["box_vectors"].tolist(),
+                    "common_align_atoms": int(fit["common_align_atoms"]),
+                }
+
+                rows.append(row)
+
+                trial_record = {
                     "row": row,
-                    "fit": fit,
-                    "helpers": helpers,
                     "helper_metadata": helper_metadata,
                 }
 
-            if args.save_all_trials:
-                amp_label = safe_float_label(amplitude)
-                pad_label = safe_float_label(padding)
+                trial_records.append(trial_record)
 
-                trial_struct_dir = (
-                    structures_dir
-                    / "all_trials"
-                    / f"amp{amp_label}nm_pad{pad_label}nm"
-                )
-                trial_raw_dir = (
-                    raw_data_dir
-                    / "all_trials"
-                    / f"amp{amp_label}nm_pad{pad_label}nm"
-                )
+                if best_global is None or row["score"] < best_global["row"]["score"]:
+                    best_global = {
+                        "row": row,
+                        "fit": fit,
+                        "helpers": helpers,
+                        "helper_metadata": helper_metadata,
+                    }
 
-                trial_struct_dir.mkdir(parents=True, exist_ok=True)
-                trial_raw_dir.mkdir(parents=True, exist_ok=True)
+                if args.save_all_trials:
+                    amp_label = safe_float_label(amplitude)
+                    pad_label = safe_float_label(padding)
 
-                fit["target_boxed"].save_gro(
-                    (trial_struct_dir / "target_common_box.gro").as_posix()
-                )
-                fit["target_boxed"].save_pdb(
-                    (trial_struct_dir / "target_common_box.pdb").as_posix()
-                )
+                    trial_struct_dir = (
+                        structures_dir
+                        / "all_trials"
+                        / f"mode{bio3d_mode_number:03d}_amp{amp_label}nm_pad{pad_label}nm"
+                    )
+                    trial_raw_dir = (
+                        raw_data_dir
+                        / "all_trials"
+                        / f"mode{bio3d_mode_number:03d}_amp{amp_label}nm_pad{pad_label}nm"
+                    )
 
-                with open(trial_raw_dir / "trial_summary.json", "w") as f:
-                    json.dump(trial_record, f, indent=2)
+                    trial_struct_dir.mkdir(parents=True, exist_ok=True)
+                    trial_raw_dir.mkdir(parents=True, exist_ok=True)
+
+                    fit["target_boxed"].save_gro(
+                        (trial_struct_dir / "target_common_box.gro").as_posix()
+                    )
+                    fit["target_boxed"].save_pdb(
+                        (trial_struct_dir / "target_common_box.pdb").as_posix()
+                    )
+
+                    with open(trial_raw_dir / "trial_summary.json", "w") as f:
+                        json.dump(trial_record, f, indent=2)
 
         print("")
 
     # -------------------------------------------------------------------------
-    # 6. Sort results and write sweep data
+    # 7. Sort all one-mode trials and select the best x/y/z independently
     # -------------------------------------------------------------------------
 
     rows_sorted = sorted(rows, key=lambda x: x["score"])
@@ -1279,86 +1520,142 @@ def main() -> None:
     with open(raw_data_dir / "sweep_results.json", "w") as f:
         json.dump(rows_sorted, f, indent=2)
 
-    if best is None:
+    if best_global is None:
         raise RuntimeError("No successful trial was completed.")
 
-    best_row = best["row"]
-    best_fit = best["fit"]
-
-    # -------------------------------------------------------------------------
-    # 7. Save best boxed target and raw data
-    # -------------------------------------------------------------------------
-
-    best_fit["target_boxed"].save_gro(
-        (structures_dir / "best_target_common_box.gro").as_posix()
-    )
-    best_fit["target_boxed"].save_pdb(
-        (structures_dir / "best_target_common_box.pdb").as_posix()
+    per_axis_best = select_best_per_axis(
+        rows=rows,
+        target_box_lengths=target_box_lengths,
+        undersize_tolerance=args.undersize_tolerance,
     )
 
-    np.save(raw_data_dir / "best_box_axes_rows.npy", best_fit["axes"])
-    np.save(raw_data_dir / "best_box_lengths_nm.npy", best_fit["lengths"])
-    np.save(raw_data_dir / "best_box_vectors_nm.npy", best_fit["box_vectors"])
+    final_lengths = np.array(per_axis_best["final_lengths_nm"], dtype=float)
+    final_box = transform_target_to_final_box(
+        target=target,
+        reference=reference,
+        common_align_selection=args.common_align_selection,
+        target_fit_selection=args.target_fit_selection,
+        center_selection=args.center_selection,
+        axes=fixed_axes,
+        lengths=final_lengths,
+    )
 
-    best_summary = {
-        "best": best_row,
-        "target": str(args.target),
-        "reference": str(args.reference),
-        "original_gro": str(args.original_gro),
-        "nma_dir": str(nma_dir),
-        "raw_modes_all": str(raw_modes_all_path),
-        "helper_reference": "build_protein_heavy_views(pdb)[0]",
-        "common_align_selection": args.common_align_selection,
-        "target_fit_selection": args.target_fit_selection,
-        "helper_fit_selection": args.helper_fit_selection,
-        "center_selection": args.center_selection,
-        "target_box_lengths_nm": target_box_lengths.tolist(),
-        "target_box_volume_nm3": target_box_volume,
-        "helper_metadata": best["helper_metadata"],
-        "note": (
-            "Version A prototype: individual selected NMs, plus/minus helpers, "
-            "uniform amplitude for all selected modes. Padding is one-sided, "
-            "so final length = fitted extent + 2 * padding."
-        ),
-    }
+    final_box["target_boxed"].save_gro(
+        (structures_dir / "best_per_axis_target_common_box.gro").as_posix()
+    )
+    final_box["target_boxed"].save_pdb(
+        (structures_dir / "best_per_axis_target_common_box.pdb").as_posix()
+    )
 
-    with open(raw_data_dir / "best_box_summary.json", "w") as f:
-        json.dump(best_summary, f, indent=2)
+    np.save(raw_data_dir / "best_per_axis_box_lengths_nm.npy", final_lengths)
+    np.save(raw_data_dir / "best_per_axis_box_vectors_nm.npy", final_box["box_vectors"])
+
+    with open(raw_data_dir / "best_per_axis_summary.json", "w") as f:
+        json.dump(
+            {
+                "best_per_axis": per_axis_best,
+                "target": str(args.target),
+                "reference": str(args.reference),
+                "original_gro": str(args.original_gro),
+                "nma_dir": str(nma_dir),
+                "raw_modes_all": str(raw_modes_all_path),
+                "helper_reference": "build_protein_heavy_views(pdb)[0]",
+                "common_align_selection": args.common_align_selection,
+                "target_fit_selection": args.target_fit_selection,
+                "helper_fit_selection": args.helper_fit_selection,
+                "center_selection": args.center_selection,
+                "target_box_lengths_nm": target_box_lengths.tolist(),
+                "target_box_volume_nm3": target_box_volume,
+                "fixed_axes_rows": fixed_axes.tolist(),
+                "note": (
+                    "Per-axis version: each selected normal mode is tested separately "
+                    "at each amplitude. The final Lx, Ly, and Lz are selected "
+                    "independently from the candidates that are not shorter than "
+                    "the original GRO box side. All trials use one fixed PCA box frame."
+                ),
+            },
+            f,
+            indent=2,
+        )
+
+    # Also save the best single one-mode global candidate for comparison.
+    best_global_row = best_global["row"]
+    best_global_fit = best_global["fit"]
+
+    best_global_fit["target_boxed"].save_gro(
+        (structures_dir / "best_global_one_mode_target_common_box.gro").as_posix()
+    )
+    best_global_fit["target_boxed"].save_pdb(
+        (structures_dir / "best_global_one_mode_target_common_box.pdb").as_posix()
+    )
+
+    with open(raw_data_dir / "best_global_one_mode_summary.json", "w") as f:
+        json.dump(
+            {
+                "best_global_one_mode": best_global_row,
+                "helper_metadata": best_global["helper_metadata"],
+                "note": (
+                    "This is only the best single one-mode/amplitude candidate by the "
+                    "global score. The recommended result is best_per_axis_summary.json."
+                ),
+            },
+            f,
+            indent=2,
+        )
 
     if args.save_best_helpers:
+        # Save helpers for the globally best one-mode trial.
         save_helpers(
-            helpers=best["helpers"],
-            metadata=best["helper_metadata"],
-            outdir=structures_dir / "best_helpers",
+            helpers=best_global["helpers"],
+            metadata=best_global["helper_metadata"],
+            outdir=structures_dir / "best_global_one_mode_helpers",
         )
+
+        # Save helpers for each axis-selected mode/amplitude.
+        for axis_name, selected_key in [
+            ("x", "selected_x"),
+            ("y", "selected_y"),
+            ("z", "selected_z"),
+        ]:
+            selected_row = per_axis_best[selected_key]
+            selected_helpers, selected_metadata = make_nm_helpers(
+                helper_reference=helper_reference,
+                nma_modes=nma_modes,
+                mode_start=int(selected_row["mode_index_zero_based"]),
+                n_modes=1,
+                amplitude=float(selected_row["amplitude_nm"]),
+            )
+            save_helpers(
+                helpers=selected_helpers,
+                metadata=selected_metadata,
+                outdir=structures_dir / "best_per_axis_helpers" / axis_name,
+            )
 
     # -------------------------------------------------------------------------
     # 8. Optional overlay plots
     # -------------------------------------------------------------------------
 
     if args.plot_overlay:
-        overlay_dir = plots_dir / "best_overlay"
+        overlay_dir = plots_dir / "best_per_axis_overlay"
         overlay_dir.mkdir(parents=True, exist_ok=True)
 
-        all_boxed = [best_fit["target_boxed"]] + best_fit["helpers_boxed"]
-        fit_indices_per_traj = [
-            best_fit["target_fit_indices"]
-        ] + best_fit["helper_fit_indices"]
-
+        # Plot final target only in the final assembled per-axis box.
+        # The selected x/y/z helpers may come from different modes/amplitudes,
+        # so the safest visual output here is the final target in the final box.
         plot_overlay_and_box_3d(
-            trajs_box_frame=all_boxed,
-            fit_indices_per_traj=fit_indices_per_traj,
-            lengths=best_fit["lengths"],
-            out_png=overlay_dir / "overlay_box_3d.png",
+            trajs_box_frame=[final_box["target_boxed"]],
+            fit_indices_per_traj=[final_box["target_fit_indices"]],
+            lengths=final_lengths,
+            out_png=overlay_dir / "final_target_box_3d.png",
             max_points_per_structure=args.plot_max_points,
         )
 
         for plane in ("xy", "xz", "yz"):
             plot_overlay_projection(
-                trajs_box_frame=all_boxed,
-                fit_indices_per_traj=fit_indices_per_traj,
-                lengths=best_fit["lengths"],
-                out_png=overlay_dir / f"overlay_box_{plane}.png",
+                trajs_box_frame=[final_box["target_boxed"]],
+                fit_indices_per_traj=[final_box["target_fit_indices"]],
+                lengths=final_lengths,
+                out_png=overlay_dir / f"final_target_box_{plane}.png",
                 plane=plane,
                 max_points_per_structure=args.plot_max_points,
             )
@@ -1370,27 +1667,59 @@ def main() -> None:
     print("====================================")
     print("Done")
     print("====================================")
-    print(f"Best amplitude nm:     {best_row['amplitude_nm']}")
-    print(f"Best padding nm:       {best_row['padding_nm']}")
-    print(f"Best score:            {best_row['score']:.6f}")
-    print(f"Length RMSE nm:        {best_row['length_rmse_nm']:.6f}")
-    print(f"Volume rel error:      {best_row['volume_rel_error']:.6f}")
+    print("Recommended result: best per-axis box")
+    print("")
+    print("Selected x-axis candidate:")
     print(
-        "Predicted lengths nm:  "
-        f"{best_row['pred_Lx_nm']:.6f} "
-        f"{best_row['pred_Ly_nm']:.6f} "
-        f"{best_row['pred_Lz_nm']:.6f}"
+        f"  mode {per_axis_best['selected_x']['bio3d_mode_number']} | "
+        f"amp {per_axis_best['selected_x']['amplitude_nm']} nm | "
+        f"Lx {per_axis_best['selected_x']['pred_Lx_nm']:.6f} nm | "
+        f"x_error {per_axis_best['selected_x']['x_error_nm']:.6f} nm"
     )
+    print("Selected y-axis candidate:")
     print(
-        "Target lengths nm:     "
-        f"{best_row['target_Lx_nm']:.6f} "
-        f"{best_row['target_Ly_nm']:.6f} "
-        f"{best_row['target_Lz_nm']:.6f}"
+        f"  mode {per_axis_best['selected_y']['bio3d_mode_number']} | "
+        f"amp {per_axis_best['selected_y']['amplitude_nm']} nm | "
+        f"Ly {per_axis_best['selected_y']['pred_Ly_nm']:.6f} nm | "
+        f"y_error {per_axis_best['selected_y']['y_error_nm']:.6f} nm"
+    )
+    print("Selected z-axis candidate:")
+    print(
+        f"  mode {per_axis_best['selected_z']['bio3d_mode_number']} | "
+        f"amp {per_axis_best['selected_z']['amplitude_nm']} nm | "
+        f"Lz {per_axis_best['selected_z']['pred_Lz_nm']:.6f} nm | "
+        f"z_error {per_axis_best['selected_z']['z_error_nm']:.6f} nm"
     )
     print("")
-    print(f"Wrote structures to:   {structures_dir}")
-    print(f"Wrote raw data to:     {raw_data_dir}")
-    print(f"Wrote plots to:        {plots_dir}")
+    print(
+        "Final per-axis lengths nm:  "
+        f"{final_lengths[0]:.6f} "
+        f"{final_lengths[1]:.6f} "
+        f"{final_lengths[2]:.6f}"
+    )
+    print(
+        "Target GRO lengths nm:      "
+        f"{target_box_lengths[0]:.6f} "
+        f"{target_box_lengths[1]:.6f} "
+        f"{target_box_lengths[2]:.6f}"
+    )
+    print(
+        "Final minus target nm:      "
+        f"{final_lengths[0] - target_box_lengths[0]:.6f} "
+        f"{final_lengths[1] - target_box_lengths[1]:.6f} "
+        f"{final_lengths[2] - target_box_lengths[2]:.6f}"
+    )
+    print("")
+    print("Best global one-mode candidate, for comparison:")
+    print(f"  mode:                 {best_global_row['bio3d_mode_number']}")
+    print(f"  amplitude nm:         {best_global_row['amplitude_nm']}")
+    print(f"  padding nm:           {best_global_row['padding_nm']}")
+    print(f"  score:                {best_global_row['score']:.6f}")
+    print(f"  max shortfall nm:     {best_global_row['max_shortfall_nm']:.6f}")
+    print("")
+    print(f"Wrote structures to:    {structures_dir}")
+    print(f"Wrote raw data to:      {raw_data_dir}")
+    print(f"Wrote plots to:         {plots_dir}")
 
 
 if __name__ == "__main__":
